@@ -78,4 +78,8 @@ verify" list in the README until someone tests on a real cart.
 - Build with the Pico SDK; check `tusb.h` is reachable (fallback:
   `USE_TUD_TX_STATUS=0`).
 - Everything in the README "Still to verify on hardware" list.
+- Pin handling in the README wiring section comes from the SNESdev wiki
+  pinout only. PHI2 (57), REFRESH (33), the CIC pins and whether the GSU
+  clock comes from SYSTEM CLK (pin 1) are unverified; check a GSU cart
+  schematic before wiring.
 - PC-side sender for the loader protocol (the user is writing their own app).

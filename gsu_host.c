@@ -165,12 +165,12 @@ static const uint8_t demo_prog[32] __attribute__((unused)) = {
 // refills from RAM. The loaded program keeps using the same syscalls.
 //
 // Each 16-bit read is a 16-byte macro (d = 3, 4, 2 for addr, entry, len):
-//   A1 00        IBT R1,#0        ; op = read
-//   00 01        STOP + dummy     ; R0 low = byte
-//   1d B0 9E     TO Rd; FROM R0; LOB          ; Rd = low byte
-//   A1 00 00 01  IBT R1,#0; STOP + dummy
-//   9E 4D        LOB; SWAP        ; R0 = high byte << 8
-//   1d B0 Cd     TO Rd; FROM R0; OR Rd        ; Rd |= R0
+//   A1 00             IBT R1,#0        ; op = read
+//   00 01             STOP + dummy     ; R0 low = byte
+//   1d B0 9E          TO Rd; FROM R0; LOB          ; Rd = low byte
+//   A1 00 00 01       IBT R1,#0; STOP + dummy
+//   9E 4D             LOB; SWAP        ; R0 = high byte << 8
+//   1d B0 Cd          TO Rd; FROM R0; OR Rd        ; Rd |= R0
 // then the copy loop:
 //   30: A1 00 00 01   IBT R1,#0; STOP + dummy
 //   34: 3D 33         STB (R3)    ; ALT1 + store byte

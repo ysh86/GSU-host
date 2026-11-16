@@ -16,18 +16,50 @@ disassembly wiki), which checks logic and branch offsets but not hardware.
 
 ## Wiring (5 V cart <-> 3.3 V Pico: level shifters required)
 
-| Pico    | Cart signal |
-|---------|-------------|
-| GP0-9   | A0-A9       |
-| GP10-17 | D0-D7       |
-| GP18    | /RD         |
-| GP19    | /WR         |
-| GP20    | /RESET      |
-| GP21    | (optional) 21.477 MHz clock, see ENABLE_GSU_CLK_OUT |
+Pin numbers are the 62-pin SNES cartridge connector, from the SNESdev wiki
+(link in Sources). Directions there are read from a diagram, so treat them as
+approximate. Every connector pin is accounted for below.
 
-A10-A23 are hard-wired so the cart decodes $3000-$32FF in bank $00.
-Cart ROM/RAM buses are never touched by the host. Power the cart from 5 V.
-The host polls SFR.GO instead of using /IRQ, so /IRQ is not connected.
+**Driven by the Pico (through level shifters)**
+
+| Pico    | Cart signal | Connector pins |
+|---------|-------------|----------------|
+| GP0-9   | A0-A9       | 17,16,15,14,13,12,11,10,9,8 |
+| GP10-17 | D0-D7       | 19,20,21,22, 50,51,52,53 |
+| GP18    | /RD         | 23 |
+| GP19    | /WR         | 54 |
+| GP20    | /RESET      | 26 (bidirectional on the console; the firmware only drives it) |
+
+**Hard-wired levels** (so the cart decodes $3000-$32FF in bank $00)
+
+| Level | Signals (connector pins) |
+|-------|--------------------------|
+| High  | A12 (37), A13 (38) |
+| Low   | A10 (7), A11 (6), A14 (39), A15 (40), A16-A23 (41-48) |
+| High (inactive) | /ROMSEL, also called /CART (49), /WRAMSEL (32), /PRD (4), /PWR (35) |
+| Low (unused)    | PA0-PA7 (28, 59, 29, 60, 30, 61, 3, 34), B-bus address, not used by the GSU registers (unverified) |
+
+**Power and clock**
+
+| Signal | Pins | Notes |
+|--------|------|-------|
+| +5V    | 27, 58 | power the cart from 5 V |
+| GND    | 5, 36 | common with the Pico |
+| SYSTEM CLK | 1 | 21.47727 MHz input from the console. If the cart gets its GSU clock from here (see below), feed it from a 21.47727 MHz oscillator module; GP21 (`ENABLE_GSU_CLK_OUT`) is a jittery fallback |
+| PHI2 | 57 | CPU clock. The wiki says /RD, /WR, /PRD, /PWR are normally used instead and does not say whether a GSU cart uses PHI2. Do not leave it floating: check the cart schematic and, until known, drive it from a spare GPIO or fixed level (unverified) |
+
+**Not connected, or decided from the schematic**
+
+| Signal | Pin | Notes |
+|--------|-----|-------|
+| /IRQ | 18 | cart output; the host polls SFR.GO and masks IRQ in CFGR, so leave open (pull-up if you use it later) |
+| EXPAND | 2 | pulled high on the console side; leave open |
+| CIC data 1, CIC reset, CIC data 2, CIC CLK | 24, 25, 55, 56 | lockout chip talks to the console's CIC, not needed to run the GSU (unverified); leave open |
+| REFRESH | 33 | not described on the wiki; may matter only if the cart RAM is pseudo-SRAM. Check the schematic |
+| left/right audio | 31, 62 | leave open |
+
+Cart ROM/RAM buses are never touched by the host. The host polls SFR.GO
+instead of using /IRQ.
 
 ## Startup text, then binary
 
@@ -119,6 +151,7 @@ character you type returns as character + 1.
 
 ## Sources
 
+- SNES cartridge connector pinout (SNESdev Wiki): https://snes.nesdev.org/wiki/Cartridge_connector
 - Fullsnes (Nocash SNES Specs), SNES Cart GSU-n chapters: https://problemkaputt.de/fullsnes.htm
 - Super FX instruction set table (Yoshi's Island disassembly wiki): https://github.com/brunovalads/yoshisisland-disassembly/wiki/Super-FX-Instruction-Set
 - rmstdope/neser PR 3205 (cache clearing conditions): https://github.com/rmstdope/neser/pull/3205
