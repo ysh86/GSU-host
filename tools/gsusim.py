@@ -12,6 +12,7 @@ def _arr(name):
 # Single source of truth: the byte arrays in gsu_host.c.
 LOADER=_arr("loader_prog")
 DEMO=_arr("demo_prog")
+MEASURE=_arr("measure_prog")
 
 class GSU:
     def __init__(s, cache):
@@ -67,9 +68,10 @@ def host(g, rx, steps=200000):
         g.run(); op=g.r[1]&0xFF
         if op==0: 
             if not rx: return out,'rx-empty'
-            g.r[0]=(g.r[0]&0xFF00)|rx.pop(0)
+            g.r[0]=rx.pop(0)       # host writes R0 as a zero-extended 16-bit value
         elif op==1: out.append(g.r[0]&0xFF)
-        elif op==2: g.r[0]=(g.r[0]&0xFF00)|(1 if rx else 0)
+        elif op==2: g.r[0]=(1 if rx else 0)
+        elif op==3: pass
         else: raise Exception("bad op")
     return out,'steps'
 
@@ -88,4 +90,9 @@ g=GSU(DEMO)
 out,why=host(g,[0x10,0x20,0x30])
 print("demo:", [hex(x) for x in out], why)
 assert out==[0x11,0x21,0x31]
+# --- measurement program: nop syscall, loops forever
+g=GSU(MEASURE); calls=0
+for _ in range(1000):
+    g.run(); assert g.r[1]&0xFF==3, "measure op"; calls+=1
+print("measure: %d nop syscalls ok, R15 after STOP=%04X"%(calls,g.r[15]))
 print("ALL OK")

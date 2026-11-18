@@ -21,14 +21,20 @@ cache or cart RAM and use STOP as a system call into USB serial.
 | `tools/gsusim.py`     | mini GSU simulator; reads `loader_prog` / `demo_prog` from `gsu_host.c` |
 | `tools/stubs/`        | stub Pico SDK headers, only for the syntax check |
 
-## Status: never built, never run on hardware
+## Status: confirmed on a real GSU-1; loader not yet run
 
-The authoring sandbox had no ARM toolchain, no Pico SDK, and no cartridge.
-`tools/check.sh` is the only verification: it proves the C parses and that
-the GSU programs behave on a simulator written from my own reading of the
-docs. It does not prove hardware behaviour. Do not describe anything as
-working on hardware. Keep the `[VERIFY]` markers in code and the "Still to
-verify" list in the README until someone tests on a real cart.
+The authoring sandbox had no ARM toolchain, no Pico SDK and no cartridge; the
+user builds and tests on hardware. Confirmed on a real GSU-1 (board 1CA6B-01):
+the `-DGSU_DIAG=1` build passes all checks (bus read/write, SFR flags,
+R0-R13, latched writes, cache, start via R15, STOP with R15 = STOP + 2, resume
+by rewriting R15, at CFGR/CLSR 80/01 and 00/00); the echo demo works (typed
+characters return +1), so the read/write/status syscalls work; and the
+measurement build gave 12.4 us and about 80,900 syscalls/s (bus read 1686 ns,
+write 1712 ns, BUS_DELAY_CYCLES 64 at 125 MHz; 7 bus accesses per syscall).
+Not yet run on the cart: the RAM loader and LJMP. `tools/check.sh` proves the
+C parses and that the programs behave on a simulator written from reading the
+docs; it does not prove hardware behaviour. Keep the `[VERIFY]` markers in the
+code and the "Still to verify" list in the README for what is unconfirmed.
 
 ## Rules for changes
 
@@ -57,7 +63,14 @@ verify" list in the README until someone tests on a real cart.
   empty it.
 - Writing R15's high byte starts the GSU. A cache line becomes valid when
   its 16th byte is written.
-- While GO=1, the host only polls SFR; it touches other registers after STOP.
+- Host writes to R0-R15 are latched: the even-address (LSB) write only sets
+  LATCH, the odd-address (MSB) write applies LSB=LATCH, MSB=data. Never write
+  an LSB alone and expect the register to change; use `gsu_reg16_write()`.
+- While GO=1 the host may access only SFR, SCMR and VCR (fullsnes); it polls
+  SFR and touches other registers after STOP.
+- Cache loading: write SFR=0000h first (forces CBR=0, marks all lines empty),
+  then write 16-byte lines; the last byte of a line marks it valid.
+  `load_program()` does this, which is the one intended GO=0 write.
 
 ## Design decisions to keep
 
@@ -67,19 +80,31 @@ verify" list in the README until someone tests on a real cart.
   that would save a few bus accesses. Do not "optimize" it without asking.
 - Completion is detected by polling SFR.GO, not /IRQ.
 - Syscalls are R1 low byte = op, R0 low byte = data: 0 read, 1 write,
-  2 status (bit0 RDRF, bit1 TDRE, like a 6850 ACIA's low status bits).
+  2 status (bit0 RDRF, bit1 TDRE, like a 6850 ACIA's low status bits). Read
+  and status results are written to R0 as zero-extended 16-bit values.
 - The default program is the RAM loader; `-DGSU_PROGRAM_DEMO=1` selects the
-  +1 echo demo. Output after the `READY\r\n` line is raw binary, so do not
+  +1 echo demo; `-DGSU_DIAG=1` (wins over all; PASS/FAIL checks, text only; use it first on any new wiring);
+  `-DGSU_MEASURE=1` (wins over the others) selects the
+  throughput measurement build (syscall 3 = NOP, report printed once, no
+  prints during the timed loop). Output after the `READY\r\n` line is raw binary, so do not
   add debug prints after it.
 
 ## Not done yet
 
 - Real GSU assembler pass over the hand-assembled programs (bass or WLA-DX).
-- Build with the Pico SDK; check `tusb.h` is reachable (fallback:
-  `USE_TUD_TX_STATUS=0`).
-- Everything in the README "Still to verify on hardware" list.
-- Pin handling in the README wiring section comes from the SNESdev wiki
-  pinout only. PHI2 (57), REFRESH (33), the CIC pins and whether the GSU
-  clock comes from SYSTEM CLK (pin 1) are unverified; check a GSU cart
-  schematic before wiring.
+- The README "Still to verify" list (loader/LJMP, assembler pass,
+  MC1 hang question). The Pico SDK build and `tusb.h` work.
+- Optional speed-up: lower `BUS_DELAY_CYCLES` and re-run the diagnostic
+  build; not tried.
+- Pin handling in the README wiring section is from the SNESdev wiki
+  pinout, overridden by the user's PCB inspection of board 1CA6B-01. The
+  two 8-pin expansion groups, pins 1-4/32-35 and 28-31/59-62 (SYSTEM CLK,
+  EXPAND, PA0-PA7, /PRD, /PWR, /WRAMSEL, REFRESH, audio L/R), are confirmed
+  unused and unconnected, so all 16 stay open. PHI2, A23 and /CART are
+  unconnected; the CIC is not connected to the Super FX; the clock
+  oscillator is on the cart. No pin is left unverified, and the fixed A10-A22 levels are confirmed to
+  select the GSU registers. Other boards may differ. The chip on 1CA6B-01 is
+  a GSU-1 (user-reported), so it is not the MC1. Whether the MC1's
+  STOP-after-RAM-write hang also applies to a GSU-1 is unconfirmed; the
+  loader already keeps several instructions between STB and the next STOP.
 - PC-side sender for the loader protocol (the user is writing their own app).
