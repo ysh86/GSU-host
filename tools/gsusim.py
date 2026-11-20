@@ -13,6 +13,7 @@ def _arr(name):
 LOADER=_arr("loader_prog")
 DEMO=_arr("demo_prog")
 MEASURE=_arr("measure_prog")
+BOOT=_arr("boot_prog")
 
 class GSU:
     def __init__(s, cache):
@@ -47,7 +48,10 @@ class GSU:
                 slot=s.fetch(s.r[15]); s.r[15]=(s.r[15]+1)&0xFFFF
                 assert slot==0x01, "only NOP slot modelled"
                 if take: s.r[15]=(base+off)&0xFFFF
-            elif 0xA0<=op<=0xAF: s.r[op&15]=imm()
+            elif 0xA0<=op<=0xAF: v=imm(); s.r[op&15]=v|0xFF00 if v&0x80 else v   # IBT sign-extends
+            elif 0xF0<=op<=0xFF and not a1 and not a2: lo=imm(); hi=imm(); s.r[op&15]=lo|(hi<<8)   # IWT
+            elif 0x30<=op<=0x3B and not a1 and not a2:   # STW (Rn)
+                v=s.r[sr]; a=s.r[op&15]; s.ram[a]=v&0xFF; s.ram[(a+1)&0xFFFF]=v>>8
             elif 0xD0<=op<=0xDE: v=(s.r[op&15]+1)&0xFFFF; s.r[op&15]=v; s.z=v==0
             elif 0xE0<=op<=0xEE: v=(s.r[op&15]-1)&0xFFFF; s.r[op&15]=v; s.z=v==0
             elif op==0x9E: v=s.r[sr]&0xFF; s.r[d]=v; s.z=v==0
@@ -85,6 +89,16 @@ assert bytes(g.ram[addr:addr+len(payload)])==bytes(payload), "RAM mismatch"
 print("loader: RAM ok, PBR=%02X, out=%r (%s)"%(g.pbr, bytes(out[:5]), why))
 assert g.pbr==0x70 and out[:3]==[0x41]*3 or why=='steps'
 
+# --- two-stage boot (MC1): 15-byte stage 1 in line 0 pulls loader_prog into RAM,
+# LJMPs to $70:0000, then the normal loader runs from RAM
+assert len(BOOT)==16 and BOOT[15]==0x01
+g=GSU(BOOT)
+g.r[2]=len(LOADER); g.r[3]=0; g.r[4]=0; g.r[8]=0x70
+out,why=host(g, LOADER+hdr+payload)
+assert bytes(g.ram[:len(LOADER)])==bytes(LOADER), "boot: loader not copied to RAM"
+assert bytes(g.ram[addr:addr+len(payload)])==bytes(payload), "boot: payload RAM mismatch"
+print("boot: stage 2 loader ran from RAM, PBR=%02X, out=%r (%s)"%(g.pbr, bytes(out[:5]), why))
+assert g.pbr==0x70 and out[:3]==[0x41]*3
 # --- demo test
 g=GSU(DEMO)
 out,why=host(g,[0x10,0x20,0x30])
@@ -95,4 +109,19 @@ g=GSU(MEASURE); calls=0
 for _ in range(1000):
     g.run(); assert g.r[1]&0xFF==3, "measure op"; calls+=1
 print("measure: %d nop syscalls ok, R15 after STOP=%04X"%(calls,g.r[15]))
+# --- STB/STW-then-STOP hang test payload (tools/hangtest), loaded at $0100 through the loader
+import subprocess
+_h=os.path.join(os.path.dirname(os.path.abspath(__file__)),"hangtest")
+subprocess.check_call([sys.executable,"-I",os.path.join(_h,"make.py")],stdout=subprocess.DEVNULL)
+ht=list(open(os.path.join(_h,"hang_test.load"),"rb").read())
+g=GSU(LOADER)
+out,why=host(g, ht, steps=500000)
+assert why=='rx-empty', why
+assert bytes(out)==b"AaBbCcGgHhDdEND\r\n", bytes(out)
+print("hangtest: %r (%s)"%(bytes(out),why))
+for t in "ABCGHD":
+    g=GSU(LOADER)
+    out,why=host(g, list(open(os.path.join(_h,"hang_test_%s.load"%t),"rb").read()), steps=500000)
+    assert bytes(out)==(t+t.lower()+"END\r\n").encode(), (t,bytes(out))
+print("hangtest single phases ok")
 print("ALL OK")

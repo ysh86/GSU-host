@@ -17,8 +17,10 @@
 // The code cache is NOT cleared by STOP; it is cleared by CACHE, LJMP, or a
 // host write of GO=0 to SFR (which also sets CBR=0).
 //
-// STATUS: start, STOP and resume confirmed on a GSU-1 with -DGSU_DIAG=1.
-// Items marked [VERIFY] are not yet run on hardware.
+// STATUS: confirmed on hardware, on a GSU-1 and on a MARIO chip (MC1): bus,
+// registers, cache, start/STOP/resume, syscalls and the RAM loader (see the
+// README). The STB-then-STOP hang (fullsnes) was reproduced on the MC1 and is
+// absent on the GSU-1 (tools/hangtest). On the MC1, 0 or 1 NOP between the write and STOP hangs, 2 or more are fine. Nothing is left open.
 
 #include <stdio.h>
 #include <stdint.h>
@@ -79,7 +81,27 @@
 #define CFGR_IRQOFF 0x80                 // bit7 = IRQ mask (we poll GO instead).
                                          // NOT 0x20: that is MS0 (multiplier high
                                          // speed), which must be 0 with CLSR=1.
-#define CLSR_21MHZ  0x01
+// MARIO chip (MC1) preset (-DGSU_MC1=1): two-stage boot (GSU_BOOT_STAGE1) and the
+// 10.7 MHz clock. On the MC1 only cache line 0 is reliable for host-written code
+// and the 21 MHz mode runs away. Either setting can still be overridden.
+#ifndef GSU_MC1
+#define GSU_MC1 0
+#endif
+#if GSU_MC1
+#ifndef GSU_BOOT_STAGE1
+#define GSU_BOOT_STAGE1 1
+#endif
+#ifndef GSU_CLOCK_21MHZ
+#define GSU_CLOCK_21MHZ 0
+#endif
+#endif
+
+// GSU clock: 21.4 MHz by default. Build with -DGSU_CLOCK_21MHZ=0 for 10.7 MHz;
+// the MARIO chip (MC1, VCR=01) is reported not to support the 21 MHz mode.
+#ifndef GSU_CLOCK_21MHZ
+#define GSU_CLOCK_21MHZ 1
+#endif
+#define CLSR_21MHZ  (GSU_CLOCK_21MHZ ? 0x01 : 0x00)   // value written to CLSR
 
 // System call numbers (R1 low byte)
 #define SYS_READ    0
@@ -90,7 +112,9 @@
 // STOP does not flush the cache, so rewriting the program on every resume is
 // unnecessary. Set to 1 only for debugging. Never write SFR with GO=0 while
 // relying on the cache: that clears it.
+#ifndef RELOAD_CACHE_ON_RESUME
 #define RELOAD_CACHE_ON_RESUME 0
+#endif
 
 // Throughput measurement build (-DGSU_MEASURE=1). The GSU calls the NOP
 // syscall in a tight loop; the host times MEASURE_COUNT of them and prints
@@ -101,6 +125,24 @@
 #endif
 #ifndef GSU_DIAG
 #define GSU_DIAG 0
+#endif
+
+// Two-stage boot for the MARIO chip (-DGSU_BOOT_STAGE1=1): the cache holds only
+// the 15-byte stage-1 program, which pulls the normal loader into cart RAM and
+// jumps to it. Applies to the loader build only (not the demo or measure build).
+#ifndef GSU_BOOT_STAGE1
+#define GSU_BOOT_STAGE1 0
+#endif
+#define BOOT_ACTIVE (GSU_BOOT_STAGE1 && !GSU_MEASURE && !GSU_PROGRAM_DEMO)
+
+// Trace build (-DGSU_TRACE=1): print "[op R0 R15]" at each STOP (R15 as left by
+// STOP, i.e. STOP address + 2), up to TRACE_LINES lines. Repeated status polls
+// are collapsed. Intended for the echo demo (-DGSU_PROGRAM_DEMO=1).
+#ifndef GSU_TRACE
+#define GSU_TRACE 0
+#endif
+#ifndef TRACE_LINES
+#define TRACE_LINES 40
 #endif
 #ifndef MEASURE_COUNT
 #define MEASURE_COUNT 1000000u
@@ -148,8 +190,10 @@ static void cart_reset(void) {
 }
 
 // ------------------------------------------------------- GSU program ------
-// Two 16-byte cache lines, hand-assembled. [VERIFY] opcodes and branch
-// offsets against a GSU assembler such as bass or WLA-DX.
+// Two 16-byte cache lines, hand-assembled. The user assembled the same program
+// with bass: the bytes match, and it runs on the GSU-1. It does not work on
+// the MC1, whose host-written cache code is only usable inside one 16-byte
+// block (README, MC1 section).
 //
 //  00: A1 02     IBT R1,#2        ; op = status
 //  02: 00        STOP             ; syscall (R15 will be $04 on resume)
@@ -200,8 +244,8 @@ static const uint8_t demo_prog[32] __attribute__((unused)) = {
 //   38: 08 F6 01      BNE $30; NOP (delay slot)
 //   3B: A8 70         IBT R8,#$70
 //   3D: B4 3D 98 01   FROM R4; ALT1; LJMP R8; NOP (delay slot)
-// Checked only against a small simulator of my own, not against hardware or
-// a GSU assembler. [VERIFY]
+// Runs on the GSU-1 (default build) and on the MC1 (via the stage-1 boot,
+// GSU_BOOT_STAGE1). Not compared with assembler output.
 static const uint8_t loader_prog[80] __attribute__((unused)) = {
     // addr -> R3
     0xA1, 0x00, 0x00, 0x01, 0x13, 0xB0, 0x9E, 0xA1,
@@ -230,6 +274,30 @@ static const uint8_t measure_prog[16] __attribute__((unused)) = {
     0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
 };
 
+// Stage-1 boot loader for the MC1 (-DGSU_BOOT_STAGE1=1). On the MARIO chip only
+// cache line 0 ($00-$0F) is reliably executed when the host writes it (see the
+// README, MC1 section), so this 15-byte program fits in line 0. The host
+// presets R2 = byte count (sizeof loader_prog), R3 = 0 (RAM address), R4 = 0
+// (jump target) and R8 = $70 (RAM bank) before starting it. It reads bytes with
+// the read syscall (served from loader_prog by the firmware, not from USB),
+// stores them in RAM with STB, then LJMPs to $70:0000, where the normal loader
+// runs from cart RAM.
+//  00: A1 00     IBT R1,#0        ; op = read
+//  02: 00 01     STOP + dummy     ; R0 = next byte
+//  04: 3D 33     STB (R3)
+//  06: D3        INC R3
+//  07: E2        DEC R2           ; sets Z
+//  08: 08 F6     BNE $00          ; -10 from the byte after the operand
+//  0A: 01        NOP              ; branch delay slot
+//  0B: B4        FROM R4
+//  0C: 3D 98     ALT1; LJMP R8    ; PBR = $70, R15 = R4 = 0
+//  0E: 01        NOP              ; LJMP delay slot
+//  0F: 01        padding
+static const uint8_t boot_prog[16] __attribute__((unused)) = {
+    0xA1, 0x00, 0x00, 0x01, 0x3D, 0x33, 0xD3, 0xE2,
+    0x08, 0xF6, 0x01, 0xB4, 0x3D, 0x98, 0x01, 0x01,
+};
+
 // Select the cache program: loader (default), the +1 echo demo
 // (-DGSU_PROGRAM_DEMO=1), or the measurement loop (-DGSU_MEASURE=1,
 // which takes precedence).
@@ -240,6 +308,8 @@ static const uint8_t measure_prog[16] __attribute__((unused)) = {
 #define gsu_prog measure_prog
 #elif GSU_PROGRAM_DEMO
 #define gsu_prog demo_prog
+#elif GSU_BOOT_STAGE1
+#define gsu_prog boot_prog
 #else
 #define gsu_prog loader_prog
 #endif
@@ -263,6 +333,24 @@ static void gsu_reg16_write(uint8_t n, uint16_t v) {
     reg_write(GSU_R(n),     v & 0xFF);
     reg_write(GSU_R(n) + 1, v >> 8);
 }
+
+static uint16_t gsu_reg16_read(uint8_t n) {
+    uint16_t lo = reg_read(GSU_R(n));
+    uint16_t hi = reg_read(GSU_R(n) + 1);
+    return lo | (hi << 8);
+}
+
+#if GSU_TRACE
+// Dump the first 64 bytes of the cache (GO must be 0, i.e. at a STOP).
+static void trace_dump_cache(void) {
+    printf("cache $3100:");
+    for (uint16_t i = 0; i < 64; i++) {
+        if (i % 16 == 0) printf("\r\n ");
+        printf(" %02X", reg_read(GSU_CACHE + i));
+    }
+    printf("\r\n");
+}
+#endif
 
 static void set_r15(uint16_t pc) {
     gsu_reg16_write(15, pc);                 // the MSB write also sets GO and starts the GSU
@@ -293,6 +381,11 @@ static uint8_t rx_get(void) {
     }
     return (uint8_t)getchar();               // blocks
 }
+
+#if BOOT_ACTIVE
+static const uint8_t *boot_src;
+static uint16_t boot_left;                   // bytes of loader_prog still to serve
+#endif
 
 static bool tx_ready(void) {
     if (!stdio_usb_connected()) return false;
@@ -484,6 +577,156 @@ static bool diag_start(const char *label, uint8_t cfgr, uint8_t clsr) {
     return second;
 }
 
+
+// [5] clock check: the same cache-resident loop (DEC R2; BNE; NOP, 3 instructions
+// per iteration) is timed with CLSR=0 and CLSR=1. If CLSR takes effect the
+// second run is about twice as fast; if the chip ignores it the times match.
+static uint32_t diag_loop_us(uint8_t clsr, uint16_t *r2_after) {
+    static const uint8_t p[16] = {0xE2, 0x08, 0xFD, 0x01, 0x00, 0x01, 0x01, 0x01,
+                                  0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01};
+    reg_write(GSU_CFGR, CFGR_IRQOFF);
+    reg_write(GSU_CLSR, clsr);
+    reg_write(GSU_SFR_L, 0);
+    reg_write(GSU_SFR_H, 0);
+    for (uint8_t i = 0; i < 16; i++) reg_write(GSU_CACHE + i, p[i]);
+    gsu_reg16_write(2, 0xFFFF);                // 65535 iterations
+    uint64_t t0 = time_us_64();
+    set_r15(0);
+    while ((reg_read(GSU_SFR_L) & SFR_GO) && time_us_64() - t0 < 2000000) {}
+    uint32_t us = (uint32_t)(time_us_64() - t0);
+    (void)reg_read(GSU_SFR_H);
+    *r2_after = d_rd16(2);
+    return us;
+}
+
+static void diag_clock(void) {
+    printf("[5] clock check: 65535 x (DEC; BNE; NOP) from the cache\r\n");
+    uint16_t ra, rb;
+    uint32_t slow = diag_loop_us(0x00, &ra);
+    uint32_t fast = diag_loop_us(0x01, &rb);
+    printf("    CLSR=00: %u us (R2=%04X)   CLSR=01: %u us (R2=%04X)\r\n",
+           (unsigned)slow, ra, (unsigned)fast, rb);
+    d_check("loop finished (R2=0000 both runs)", ra == 0 && rb == 0);
+    if (fast == 0) return;
+    unsigned ratio = (unsigned)((uint64_t)slow * 100 / fast);
+    printf("    ratio slow/fast = %u.%02u (about 2.00 if CLSR=1 gives 21 MHz)\r\n",
+           ratio / 100, ratio % 100);
+    printf("    approx. instruction rate: %u kHz at CLSR=00, %u kHz at CLSR=01\r\n",
+           (unsigned)(196605000u / (slow ? slow : 1)), (unsigned)(196605000u / fast));
+    if (ratio >= 170) printf("    -> CLSR=01 takes effect (about 21 MHz).\r\n");
+    else if (ratio >= 90 && ratio <= 115) printf("    -> no speed change: CLSR=01 has no effect on this chip.\r\n");
+    else printf("    -> unclear; check the numbers.\r\n");
+}
+
+
+// [6] cache line tests: run small programs from specific cache lines and from
+// across a line boundary, to see whether the GSU keeps using host-written lines.
+struct lt { const char *name; uint16_t base; uint8_t code[32]; uint8_t nlines;
+            uint16_t start, e1, e2, e15, e1b, e2b, e15b; bool has2; uint16_t e3; };
+
+static bool diag_line_test(const struct lt *t) {
+    printf("    %s\r\n", t->name);
+    reg_write(GSU_CFGR, CFGR_IRQOFF);
+    reg_write(GSU_CLSR, CLSR_21MHZ);
+    reg_write(GSU_SFR_L, 0);
+    reg_write(GSU_SFR_H, 0);
+    for (uint8_t i = 0; i < t->nlines * 16; i++) reg_write(GSU_CACHE + t->base + i, t->code[i]);
+    gsu_reg16_write(1, 0);
+    gsu_reg16_write(2, 0);
+    gsu_reg16_write(3, 0);
+    set_r15(t->start);
+    uint64_t t0 = time_us_64();
+    while ((reg_read(GSU_SFR_L) & SFR_GO) && time_us_64() - t0 < 100000) {}
+    (void)reg_read(GSU_SFR_H);
+    uint16_t r1 = d_rd16(1), r2 = d_rd16(2), r3 = d_rd16(3), r15 = get_r15();
+    bool ok = r1 == t->e1 && r2 == t->e2 && r3 == t->e3 && r15 == t->e15;
+    printf("      stop 1: R1=%04X R2=%04X R3=%04X R15=%04X (expect %04X %04X %04X %04X) CBR=%02X%02X\r\n",
+           r1, r2, r3, r15, t->e1, t->e2, t->e3, t->e15, reg_read(GSU_CBR_H), reg_read(GSU_CBR_L));
+    if (ok && t->has2) {
+        set_r15(get_r15());
+        t0 = time_us_64();
+        while ((reg_read(GSU_SFR_L) & SFR_GO) && time_us_64() - t0 < 100000) {}
+        (void)reg_read(GSU_SFR_H);
+        r1 = d_rd16(1); r2 = d_rd16(2); r15 = get_r15();
+        ok = r1 == t->e1b && r2 == t->e2b && r15 == t->e15b;
+        printf("      stop 2: R1=%04X R2=%04X R15=%04X (expect %04X %04X %04X)\r\n",
+               r1, r2, r15, t->e1b, t->e2b, t->e15b);
+    }
+    d_check(t->name, ok);
+    return ok;
+}
+
+static void diag_lines(void) {
+    printf("[6] cache line tests\r\n");
+    static const struct lt tests[] = {
+        {"program in line 1 only (start $10)", 0x10,
+         {0xA1,0x5A,0x00,0x01,0xA2,0x77,0x00,0x01,1,1,1,1,1,1,1,1}, 1,
+         0x10, 0x5A, 0, 0x14, 0x5A, 0x77, 0x18, true, 0},
+        {"STOP at start of line 1, resume mid-line", 0x10,
+         {0x00,0x01,0xA1,0x5A,0x00,0x01,1,1,1,1,1,1,1,1,1,1}, 1,
+         0x10, 0, 0, 0x12, 0x5A, 0, 0x16, true, 0},
+        {"fall through from line 0 into line 1", 0x00,
+         {1,1,1,1,1,1,1,1,1,1,0xA1,0x5A,1,1,1,1,
+          0xA2,0x77,0x00,0x01,1,1,1,1,1,1,1,1,1,1,1,1}, 2,
+         0x0A, 0x5A, 0x77, 0x14, 0, 0, 0, false, 0},
+        {"start $00, cross into line 1 (A1 01 .. A2 77)", 0x00,
+         {0xA1,0x01,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+          0xA2,0x77,0x00,0x01,1,1,1,1,1,1,1,1,1,1,1,1}, 2,
+         0x00, 0x01, 0x77, 0x14, 0, 0, 0, false, 0},
+        {"start $02 inside line 0", 0x00,
+         {1,1,0xA1,0x5A,0x00,0x01,1,1,1,1,1,1,1,1,1,1}, 1,
+         0x02, 0x5A, 0, 0x06, 0, 0, 0, false, 0},
+        {"start $10, first byte NOP (ROM has 00 there)", 0x10,
+         {0x01,0xA1,0x5A,0x00,0x01,1,1,1,1,1,1,1,1,1,1,1}, 1,
+         0x10, 0x5A, 0, 0x15, 0, 0, 0, false, 0},
+        // Branch tests: both blocks written, start in block 0 (which works).
+        // BRA offsets count from the byte after the operand; the byte after a
+        // branch (NOP) executes first.
+        {"BRA block 0 -> block 1 (forward)", 0x00,
+         {0xA1,0x01, 0x05,0x0C, 0x01,1,1,1,1,1,1,1,1,1,1,1,
+          0xA2,0x77, 0x00,0x01,1,1,1,1,1,1,1,1,1,1,1,1}, 2,
+         0x00, 0x01, 0x77, 0x14, 0, 0, 0, false, 0},
+        {"BRA block 0 -> 1 -> back to block 0", 0x00,
+         {0xA1,0x01, 0x05,0x0C, 0x01,1,1,1, 0xA3,0x99,0x00,0x01,1,1,1,1,
+          0xA2,0x77, 0x05,0xF4, 0x01,1,1,1,1,1,1,1,1,1,1,1}, 2,
+         0x00, 0x01, 0x77, 0x0C, 0, 0, 0, false, 0xFF99},
+        {"BRA inside block 1 (entered by BRA from block 0)", 0x00,
+         {0xA1,0x01, 0x05,0x0C, 0x01,1,1,1,1,1,1,1,1,1,1,1,
+          0xA2,0x77, 0x05,0x02, 0x01,1, 0xA3,0x99,0x00,0x01,1,1,1,1,1,1}, 2,
+         0x00, 0x01, 0x77, 0x1A, 0, 0, 0, false, 0xFF99},
+        {"program in line 31 only (start $1F0)", 0x1F0,
+         {0xA1,0x5A,0x00,0x01,0xA2,0x77,0x00,0x01,1,1,1,1,1,1,1,1}, 1,
+         0x1F0, 0x5A, 0, 0x1F4, 0x5A, 0x77, 0x1F8, true, 0},
+    };
+    for (unsigned i = 0; i < sizeof tests / sizeof tests[0]; i++) diag_line_test(&tests[i]);
+}
+
+// [7] "last block" hypothesis for the MC1: host-written code is used only while
+// execution stays in the block that ran last; entering another block reads ROM.
+// Prediction: a block-0 program started right after a run that ended in block 1
+// FAILS, and started again right after that (the failed run ended in block 0) PASSES.
+static void diag_lastblock(void) {
+    printf("[7] last-block test (MC1-like chips: step 2 FAIL, step 3 PASS; GSU-1: both PASS)\r\n");
+    static const struct lt setup = {"step 1: run ending in block 1 (setup, result ignored)", 0x10,
+        {0x00,0x01,0xA1,0x5A,0x00,0x01,1,1,1,1,1,1,1,1,1,1}, 1,
+        0x10, 0, 0, 0x12, 0x5A, 0, 0x16, true, 0};
+    static const struct lt blk0 = {"block-0 program, start $00", 0x00,
+        {0xA1,0x5A,0x00,0x01,1,1,1,1,1,1,1,1,1,1,1,1}, 1,
+        0x00, 0x5A, 0, 0x04, 0, 0, 0, false, 0};
+    int f0 = diag_fail;
+    (void)diag_line_test(&setup);
+    diag_fail = f0;
+    printf("    step 2 (after a run in block 1):\r\n");
+    bool a = diag_line_test(&blk0);
+    diag_fail = f0;
+    printf("    step 3 (after a run in block 0):\r\n");
+    bool b = diag_line_test(&blk0);
+    diag_fail = f0;
+    if (!a && b)      printf("    result: last-block-only behaviour (MC1-like).\r\n");
+    else if (a && b)  printf("    result: all written blocks are kept (GSU-1-like).\r\n");
+    else              printf("    result: unclear.\r\n");
+}
+
 static void diag_run(void) {
     diag_fail = 0;
     printf("\r\n==== GSU DIAG ====\r\n[1] identity\r\n");
@@ -502,6 +745,9 @@ static void diag_run(void) {
     diag_cache();
     bool a = diag_start("normal config", CFGR_IRQOFF, CLSR_21MHZ);
     bool b = diag_start("slow clock, IRQ unmasked", 0x00, 0x00);
+    diag_clock();
+    diag_lines();
+    diag_lastblock();
 
     printf("==== %d check(s) failed ====\r\n", diag_fail);
     if (diag_fail == 0) {
@@ -529,8 +775,13 @@ int main(void) {
     bus_init();
     cart_reset();
 
-    printf("\r\nGSU host: VCR=%02X SFR=%02X%02X\r\n",
-           reg_read(GSU_VCR), reg_read(GSU_SFR_H), reg_read(GSU_SFR_L));
+    // CLK is what the host will set in CLSR (CLSR cannot be read back).
+    printf("\r\nGSU host: VCR=%02X SFR=%02X%02X CLK=%s MODE=%s%s\r\n",
+           reg_read(GSU_VCR), reg_read(GSU_SFR_H), reg_read(GSU_SFR_L),
+           GSU_CLOCK_21MHZ ? "21.4MHz" : "10.7MHz",
+           GSU_DIAG ? "diag" : GSU_MEASURE ? "measure" : GSU_PROGRAM_DEMO ? "demo"
+           : GSU_BOOT_STAGE1 ? "boot+loader" : "loader",
+           RELOAD_CACHE_ON_RESUME ? " RELOAD=1" : "");
 
 #if GSU_DIAG
     for (;;) {
@@ -547,6 +798,14 @@ int main(void) {
     reg_write(GSU_PBR,  0x00);
 
     load_program();
+#if BOOT_ACTIVE
+    gsu_reg16_write(2, sizeof loader_prog);  // byte count
+    gsu_reg16_write(3, 0x0000);              // RAM address
+    gsu_reg16_write(4, 0x0000);              // jump target after loading
+    gsu_reg16_write(8, 0x0070);              // RAM bank
+    boot_src = loader_prog;
+    boot_left = sizeof loader_prog;
+#endif
     set_r15(0x0000);
 #if GSU_PROGRAM_DEMO
     printf("demo: type characters, each returns +1\r\n");
@@ -570,8 +829,26 @@ int main(void) {
         (void)reg_read(GSU_SFR_H);
 
         uint8_t op = reg_read(GSU_R(1));
+#if GSU_TRACE
+        {
+            static int trace_left = TRACE_LINES;
+            static int last_op = -1;
+            if (trace_left > 0 && !(op == SYS_STATUS && last_op == SYS_STATUS)) {
+                printf("[op=%02X R0=%04X R15=%04X CBR=%02X%02X SFR=%02X%02X]\r\n", op,
+                       gsu_reg16_read(0), gsu_reg16_read(15),
+                       reg_read(GSU_CBR_H), reg_read(GSU_CBR_L),
+                       reg_read(GSU_SFR_H), reg_read(GSU_SFR_L));
+                trace_left--;
+                if (trace_left == TRACE_LINES - 4) trace_dump_cache();
+            }
+            last_op = op;
+        }
+#endif
         switch (op) {
         case SYS_READ:                       // USB -> R0 (zero-extended)
+#if BOOT_ACTIVE
+            if (boot_left) { boot_left--; gsu_reg16_write(0, *boot_src++); break; }
+#endif
             gsu_reg16_write(0, rx_get());
             break;
         case SYS_WRITE:                      // R0 low -> USB
