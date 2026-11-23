@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Build the STB-then-STOP hang test for the loader (load and entry at $0100).
+"""Build the STB-then-STOP hang test for the loader (load and entry at $0200).
 
 Writes next to this script:
-  hang_test.bin       the payload (assembled for $70:0100)
+  hang_test.bin       the payload (assembled for $70:0200)
   hang_test.load      loader stream: addr(2) entry(2) len(2) + payload, little endian
   hang_test.lst.txt   listing (address, bytes, source)
 
@@ -30,8 +30,8 @@ if len(sys.argv) == 1:
 SEL = sys.argv[1]
 SUFFIX = "" if SEL == "ABCGHD" else "_" + SEL
 
-BASE = 0x0100
-SCRATCH = 0x0200          # RAM address written by STB/STW (above the program)
+BASE = 0x0200
+SCRATCH = 0x0400          # RAM address written by STB/STW (above the program)
 N = 10000
 
 out = []       # (kind, payload, text)

@@ -183,7 +183,7 @@ SnesLab の「各ブロックに使用中のフラグがある」とは違い、
 
 ### 4.5 STB の直後の STOP（実測）
 
-`tools/hangtest/` のバイナリ（`$0100` にロード、各 1 万回）で確認した。GSU-1 は 4 パターンとも完走（`AaBbCcDdEND`）。MC1 は `STB (R3); STOP` で止まり（`A` の後 `TIMEOUT`、SFR=0022 = GO が立ったまま）、fullsnes の報告どおり。STW 直後（B）と NOP 1 個を挟んだ場合（C）も止まり、NOP 4 個（D）なら完走する。NOP 2 個（G）、3 個（H）も完走する（各 2 回確認）ので、最小は 2 命令。ローダーと stage 1 は STB と STOP の間に 5 命令あるので安全。
+`tools/hangtest/` のバイナリ（`$0200` にロード、各 1 万回）で確認した。GSU-1 は 4 パターンとも完走（`AaBbCcDdEND`）。MC1 は `STB (R3); STOP` で止まり（`A` の後 `TIMEOUT`、SFR=0022 = GO が立ったまま）、fullsnes の報告どおり。STW 直後（B）と NOP 1 個を挟んだ場合（C）も止まり、NOP 4 個（D）なら完走する。NOP 2 個（G）、3 個（H）も完走する（各 2 回確認）ので、最小は 2 命令。ローダーと stage 1 は STB と STOP の間に 5 命令あるので安全。
 
 ## 5. 未解決の問題（MC1）
 

@@ -20,7 +20,7 @@ cache or cart RAM and use STOP as a system call into USB serial.
 | `docs/cache-and-chip-notes.ja.md` | Japanese notes: GSU cache behaviour and GSU-1 vs MC1 measurements |
 | `tools/check.sh`      | syntax check (both program modes) + simulator run |
 | `tools/gsusim.py`     | mini GSU simulator; reads `loader_prog` / `demo_prog` from `gsu_host.c` |
-| `tools/hangtest/`     | `make.py` builds `hang_test.load` (STB/STW-then-STOP test, load at $0100); checked in `gsusim.py` |
+| `tools/hangtest/`     | `make.py` builds `hang_test.load` (STB/STW-then-STOP test, load at $0200); checked in `gsusim.py` |
 | `tools/stubs/`        | stub Pico SDK headers, only for the syntax check |
 
 ## Status: confirmed on a GSU-1 and an MC1, including the loader
@@ -56,6 +56,10 @@ $0000-$004F, so payloads must load at $0050 or above. `-DGSU_CLOCK_21MHZ=0` sele
 
 ## Rules for changes
 
+0. Project convention for loadable programs and test binaries: load and entry
+   address `$0200`; `$0000-$01FF` is scratch RAM for variables (LMS/SMS reach
+   it with 2-byte instructions) and its contents at start are undefined.
+   Examples and new tools use this unless there is a reason not to.
 1. Run `tools/check.sh` after every edit to `gsu_host.c`.
 2. `loader_prog` and `demo_prog` are hand-assembled. The comment above each
    array, the bytes, and the README must agree. The simulator reads the

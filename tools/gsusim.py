@@ -81,7 +81,7 @@ def host(g, rx, steps=200000):
 
 # --- loader test
 payload=[0xA1,0x01, 0xA0,0x41, 0x00,0x01, 0x05,0xFA, 0x01]   # write 'A' forever
-addr=0x0100; entry=0x0100
+addr=0x0200; entry=0x0200
 hdr=[addr&255,addr>>8, entry&255,entry>>8, len(payload)&255,len(payload)>>8]
 g=GSU(LOADER)
 out,why=host(g, hdr+payload)
@@ -109,7 +109,7 @@ g=GSU(MEASURE); calls=0
 for _ in range(1000):
     g.run(); assert g.r[1]&0xFF==3, "measure op"; calls+=1
 print("measure: %d nop syscalls ok, R15 after STOP=%04X"%(calls,g.r[15]))
-# --- STB/STW-then-STOP hang test payload (tools/hangtest), loaded at $0100 through the loader
+# --- STB/STW-then-STOP hang test payload (tools/hangtest), loaded at $0200 through the loader
 import subprocess
 _h=os.path.join(os.path.dirname(os.path.abspath(__file__)),"hangtest")
 subprocess.check_call([sys.executable,"-I",os.path.join(_h,"make.py")],stdout=subprocess.DEVNULL)

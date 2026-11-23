@@ -231,11 +231,17 @@ The loader reads each byte with the read syscall, stores it with STB, then
 runs LJMP to bank $70 at the entry address. The loaded program keeps using
 the same syscalls through STOP. Notes:
 
+- **Convention: load and enter at $0200.** Keep $0000-$01FF free as scratch
+  RAM for variables: `LMS Rn,(yy)` and `SMS (yy),Rn` reach exactly that
+  range with 2-byte instructions (address = yy x 2). Its contents at start
+  are undefined (the previous run's data, or the loader's leftovers at
+  $0000-$004F on the MC1), so write a variable before reading it. $0200 is
+  also above the MC1 loader, so one binary runs on both chips.
 - Assemble the payload for the address you load it at. Load and entry
   addresses are independent, so data can sit below the code.
 - With `-DGSU_BOOT_STAGE1=1` (MC1) the loader itself sits in cart RAM at
-  $0000-$004F while it runs, so load the program at $0050 or above (for
-  example $0100). Loading over $0000-$004F overwrites the running loader. With
+  $0000-$004F while it runs, so load the program at $0050 or above (by
+  the convention above, $0200). Loading over $0000-$004F overwrites the running loader. With
   the default build the loader runs from the cache, so any address works.
 - Length is limited by the cart's RAM size (commonly 32 KB or 64 KB), and
   the loader does not check it.
@@ -383,8 +389,8 @@ the firmware prints two lines and then halts:
 ## STB-then-STOP hang test (`tools/hangtest/`)
 
 `hang_test.load` is a ready-made loader stream (load address and entry
-`$0100`, 226 bytes; works on both chips, since `$0100` is above the stage-1
-area). `hang_test_A.load` ... (`_B`, `_C`, `_G`, `_H`, `_D`) contain one phase each (use
+`$0200`, 226 bytes; works on both chips, since `$0200` is above the stage-1
+area; the test writes to `$0400`). `hang_test_A.load` ... (`_B`, `_C`, `_G`, `_H`, `_D`) contain one phase each (use
 them after a hang, because the all-in-one file stops at the first hang).
 `python3 tools/hangtest/make.py` regenerates everything, with `.bin` and a
 listing (`.lst.txt`) for each; `make.py BCD` builds a custom selection.
