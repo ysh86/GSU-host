@@ -12,10 +12,11 @@
 //   op 0  nop     nothing (used by the measurement build)
 //   op 1  exit    control returns to the Pico: prints EXIT and enters the
 //                 debug monitor (d dump RAM, r registers, g resume, l load)
-//   op 2  status  R0 <- 6850-ACIA-style status (zero-extended), bit0 = RDRF
-//                 (receive data available), bit1 = TDRE (can transmit)
 //   op 3  read    blocks until a byte arrives; R0 <- byte (zero-extended)
 //   op 4  write   R0 low -> USB serial
+//   op 28 fstat   R0 <- 6850-ACIA-style status (zero-extended), bit0 = RDRF
+//                 (receive data available), bit1 = TDRE (can transmit)
+//   op 43 times   reserved (not implemented: stops with BAD OP)
 //
 // STOP semantics (fullsnes, GSU-n chapter): STOP clears GO, sets IRQ (even if
 // masked) and leaves R15 = STOP address + 2. The byte after STOP is
@@ -31,9 +32,10 @@
 // A10-A14 on GP21-GP25 and the RAM window (diag [8], host write/readback) are
 // confirmed on a GSU-1 and a GSU-2; on the MC1 (board 1C0N) the window neither
 // reads nor writes RAM (diag [8].2-.5), so the monitor's "d" is disabled in the
-// MC1 (detected by VCR=01). Confirmed on a GSU-1 and the MC1: the start-up monitor
-// (l, i, c, m) and the loader running from cart RAM at $0000. NOT yet run on
-// hardware (marked [VERIFY]): the exit syscall and the monitor's r, g and d.
+// MC1 (detected by VCR=01). Confirmed on a GSU-1 and the MC1: the monitor (l, i, c,
+// m, r, g, t, the exit syscall) and the loader running from cart RAM at $0000; "d"
+// on the GSU-1. The GSU-2 was not run with the monitor (assumed like the GSU-1).
+// Not measured (marked [VERIFY]): that c/m really change the clock and MS0.
 
 #include <stdio.h>
 #include <stdint.h>
@@ -74,7 +76,7 @@
 
 // TDRE uses the TinyUSB CDC write FIFO. Set to 0 to report TDRE = "USB
 // connected" using only the stdio API.
-#define GSU_HOST_VERSION "1.2.2"
+#define GSU_HOST_VERSION "1.3.0"
 
 #ifndef USE_TUD_TX_STATUS
 #define USE_TUD_TX_STATUS  1
@@ -116,9 +118,10 @@ static bool applied_clk21, applied_ms0;  // what is in the chip now (CFGR cannot
 // System call numbers (R3 low byte; Unix numbering where there is a counterpart)
 #define SYS_NOP     0                    // does nothing; used by the MEASURE build
 #define SYS_EXIT    1                    // control returns to the Pico (monitor)
-#define SYS_STATUS  2
 #define SYS_READ    3
 #define SYS_WRITE   4
+#define SYS_FSTAT   28                   // serial status -> R0
+#define SYS_TIMES   43                   // reserved, not implemented
 
 // Watchdog: -DGSU_WATCHDOG_MS=500 prints "TIMEOUT: GSU still running" into the
 // output every 500 ms while the GSU runs without a syscall. Off by default (0): a
@@ -191,7 +194,7 @@ static void cart_reset(void) {
 }
 
 // ------------------------------------------------------- cart RAM window ----
-// [VERIFY] on hardware. With A13=A14=1 and A15=0 the cart maps its RAM at
+// Confirmed on a GSU-1 and a GSU-2. With A13=A14=1 and A15=0 the cart maps its RAM at
 // $6000-$7FFF in bank $00: 8 KB = RAM $0000-$1FFF (the first 8 KB of the RAM the
 // GSU sees at $70:0000). A0-A9 come from GP0-GP9 and A10-A12 from GP21-GP23, so
 // the Pico can reach all 8 KB. The GSU must be stopped (GO=0) and SCMR.RAN must
@@ -735,7 +738,7 @@ static void diag_lastblock(void) {
     else              printf("    result: unclear.\r\n");
 }
 
-// [8] cart RAM window (A10-A14 on GP21-GP25). [VERIFY] on hardware.
+// [8] cart RAM window (A10-A14 on GP21-GP25). Confirmed on a GSU-1 and a GSU-2.
 // 8.1 float scan (informational): reads a few addresses in every 1 KB block with
 //     the data lines pre-driven to 00 and to FF before the read. Values that follow
 //     the pre-driven level mean a floating bus. A stable 00/00 is NOT proof that
@@ -917,6 +920,7 @@ static void diag_run(void) {
 //                   cart RAM is 0000-1FFF; an eaddr beyond it is cut off
 //   r               R0-R15, SFR, PBR, CBR
 //   g               resume the GSU after the exit (not possible before the first load)
+//   t               like g, and at the next exit print the elapsed time
 //   l               load: boot the loader (prints READY, then send a program)
 //   c 0|1           clock 10.7 MHz (default) / 21.4 MHz, applied at "l" or "g"
 //   m 0|1           multiplier standard (default) / high speed (MS0), at "l" or "g";
@@ -924,7 +928,6 @@ static void diag_run(void) {
 //   i               print the banner line again (VCR, SFR, CLK, MODE, MS0)
 //   ?               help
 // The loader build starts in this monitor after reset; "l" loads the loader.
-// [VERIFY] on hardware (see ram_read).
 static int hexval(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -1032,11 +1035,13 @@ static void mon_cmd_d(const char *p) {
 
 static void print_banner(void);
 
-// Returns true to resume the GSU after the exit, false to (re)load the loader.
+// Returns what to do next: load the loader, resume (g), or resume and time the run (t).
 // `resumable` is false right after reset, when no program has run yet.
-static bool monitor(bool resumable) {
+enum mon_result { MON_LOAD, MON_GO, MON_TIMED };
+
+static enum mon_result monitor(bool resumable) {
     char line[40];
-    printf("monitor: d dump, r regs, g go, l load, c clock, m mul, i info, ? help\r\n");
+    printf("cmd: d dump, r regs, g go, t timed go, l load, c clock, m mul, i info, ? help\r\n");
     for (;;) {
         printf("mon> "); fflush(stdout);
         mon_getline(line, sizeof line);
@@ -1048,14 +1053,18 @@ static bool monitor(bool resumable) {
         case 'd': mon_cmd_d(p); break;
         case 'r': mon_regs(); break;
         case 'g':
-            if (resumable) return true;
+            if (resumable) return MON_GO;
             printf("nothing to resume: use l to load a program\r\n");
             break;
-        case 'l': return false;
+        case 't':
+            if (resumable) return MON_TIMED;
+            printf("nothing to resume: use l to load a program\r\n");
+            break;
+        case 'l': return MON_LOAD;
         case 'c': case 'm': mon_cmd_cm(cmd, p); break;
         case 'i': print_banner(); break;
         default:
-            printf("d [saddr[,eaddr]] dump RAM 0000-1FFF | r regs | g go | l load | c 0|1 clock 10.7/21.4 MHz | m 0|1 multiplier std/high | i info\r\n");
+            printf("d [saddr[,eaddr]] dump RAM 0000-1FFF | r regs | g go | t timed go | l load | c 0|1 clock 10.7/21.4 MHz | m 0|1 multiplier std/high | i info\r\n");
         }
     }
 }
@@ -1063,8 +1072,8 @@ static bool monitor(bool resumable) {
 // ---------------------------------------------------------------- boot ----
 // Writes CFGR and CLSR from the c/m settings. With force=false (monitor "g") it
 // writes only what changed since the last write, so an unchanged "g" touches
-// nothing. The GSU is stopped (GO=0) whenever this is called. [VERIFY] on hardware:
-// changing CLSR/CFGR between a STOP and the resume.
+// nothing. The GSU is stopped (GO=0) whenever this is called. [VERIFY]: the program keeps
+// running after the change (GSU-1), but the effect on the clock is not measured.
 static void gsu_apply_config(bool force) {
     if (force || !applied_valid || opt_ms0 != applied_ms0)
         reg_write(GSU_CFGR, CFGR_IRQOFF | (opt_ms0 ? CFGR_MS0 : 0));
@@ -1149,6 +1158,12 @@ int main(void) {
     uint32_t meas_count = 0;
 #endif
 
+    // "t" timing: wall time from the resume to the next exit, the time the GSU
+    // itself ran (resume to STOP, summed over the syscalls), and the syscall count.
+    bool timing = false;
+    uint64_t t_begin = 0, t_resume = time_us_64(), gsu_us = 0;
+    uint32_t sys_count = 0;
+
     for (;;) {
         // Wait for STOP (GO cleared). Reading SFR also clears the IRQ flag.
 #if GSU_WATCHDOG_MS
@@ -1163,9 +1178,11 @@ int main(void) {
             }
 #endif
         }
+        uint64_t t_stop = time_us_64();
         (void)reg_read(GSU_SFR_H);
 
         uint8_t op = reg_read(GSU_R(3));
+        if (timing && op != SYS_EXIT) { gsu_us += t_stop - t_resume; sys_count++; }
         switch (op) {
         case SYS_READ:                       // USB -> R0 (zero-extended)
 #if BOOT_ACTIVE
@@ -1177,23 +1194,43 @@ int main(void) {
             putchar(reg_read(GSU_R(0)));
             fflush(stdout);
             break;
-        case SYS_STATUS:                     // status -> R0 (zero-extended)
+        case SYS_FSTAT:                      // status -> R0 (zero-extended)
             gsu_reg16_write(0, sys_status());
             break;
         case SYS_NOP:                        // nothing to do
             break;
-        case SYS_EXIT:                       // hand control to the monitor
+        case SYS_EXIT: {                     // hand control to the monitor
             printf("\r\nEXIT R15=%04X\r\n", get_r15());
-            if (!monitor(true)) { gsu_boot(is_mc1()); continue; }
-            gsu_apply_config(false);         // "g": c/m changes take effect now
+            if (timing) {
+                gsu_us += t_stop - t_resume;
+                uint64_t total = t_stop - t_begin;
+                printf("time %lu.%03lu ms (GSU run %lu.%03lu ms, %lu syscalls)\r\n",
+                       (unsigned long)(total / 1000), (unsigned long)(total % 1000),
+                       (unsigned long)(gsu_us / 1000), (unsigned long)(gsu_us % 1000),
+                       (unsigned long)sys_count);
+                timing = false;
+            }
+            enum mon_result r = monitor(true);
+            if (r == MON_LOAD) { gsu_boot(is_mc1()); t_resume = time_us_64(); continue; }
+            gsu_apply_config(false);         // g, t: c/m changes take effect now
+            if (r == MON_TIMED) {
+                timing = true; gsu_us = 0; sys_count = 0;
+                t_begin = time_us_64();
+            }
             break;                           // resume like any other syscall
+        }
         default:
             printf("\r\nBAD OP %02X R15=%04X\r\n", op, get_r15());
-            for (;;) tight_loop_contents();
+            timing = false;
+            (void)monitor(false);            // r shows the registers; only "l" returns
+            gsu_boot(is_mc1());
+            t_resume = time_us_64();
+            continue;
         }
 
         // R15 already holds STOP+2, so writing it back resumes correctly.
         set_r15(get_r15());                  // high-byte write sets GO again
+        t_resume = time_us_64();
 #if GSU_MEASURE
         if (++meas_count == MEASURE_COUNT) {
             report_measure(time_us_64() - t_start);

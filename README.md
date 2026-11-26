@@ -1,4 +1,4 @@
-# gsu-host v1.2.2
+# gsu-host v1.3.0
 
 Pico (RP2040) firmware that drives a real Super FX cartridge as a
 stand-alone processor.
@@ -11,7 +11,7 @@ GSU-2 cart. The MC1 differs; see the MC1 section.
   R0-R13 and the latched-write rule, cache write/readback, start (GO via the
   R15 high byte), STOP with R15 = STOP + 2, and resume by rewriting R15, at
   CFGR/CLSR = 80/01 (21 MHz) and 00/00. All checks pass.
-- Echo demo: each typed character returns +1, so the status, read and write
+- Echo demo: each typed character returns +1, so the fstat, read and write
   syscalls work end to end over USB serial (earlier as a cache-resident build,
   now `tools/echo_demo.load`, sent through the loader).
 - Measurement build (`-DGSU_MEASURE=1`): see "Measuring throughput" for the
@@ -24,9 +24,10 @@ GSU-2 cart. The MC1 differs; see the MC1 section.
   (32 bytes) does not work on the MC1. Every chip now uses that two-stage
   boot (see "RAM loader"); it now also runs on the GSU-1 (VCR=04).
 - Debug monitor: the start-up monitor with `l`, `i`, `c` and `m` works on the
-  GSU-1 (VCR=04) and the MC1. The exit syscall, `r`, `g` and `d` (RAM window
-  read through A10-A14 on GP21-GP25) have not been run yet (see "Verification
-  status").
+  GSU-1 (VCR=04) and the MC1. The exit syscall, `r`, `g`, `t` and `l` after an
+  exit work on both; `d` (RAM window read through A10-A14 on GP21-GP25) works on
+  the GSU-1 (the dump shows the loader at $0000-$004F). The GSU-2 has not been
+  run with the monitor yet (see "Verification status").
 - The programs were also checked on a small simulator, which checks logic and
   branch offsets, not hardware.
 
@@ -231,7 +232,7 @@ instead of using /IRQ.
 
 After reset the firmware prints a line such as
 
-    GSU host v1.2.2: VCR=01 SFR=0000 CLK=10.7MHz MODE=loader
+    GSU host v1.3.0: VCR=01 SFR=0000 CLK=10.7MHz MODE=loader
 
 with the version register, the status flags, the clock the host selects
 (`CLK` is the value the firmware writes to CLSR; CLSR cannot be read back) and
@@ -300,20 +301,22 @@ the same syscalls through STOP. Notes:
 
 The GSU program sets R3 (low byte) to the op and executes STOP. The host
 sees GO cleared, services the call, and resumes by rewriting R15. The numbers
-follow Unix (exit 1, read 3, write 4) where there is a counterpart.
+follow Unix (exit 1, read 3, write 4, fstat 28, times 43; i386 numbering) where there is a
+counterpart.
 
 | R3 | Name   | R0 low byte                                              |
 |----|--------|----------------------------------------------------------|
 | 0  | nop    | unchanged (host does nothing; used by the measurement build) |
 | 1  | exit   | control returns to the Pico: it prints `EXIT R15=xxxx` and enters the monitor |
-| 2  | status | out: bit0 = RDRF (RX byte available), bit1 = TDRE (TX can accept a byte) |
 | 3  | read   | out: next byte from USB serial (blocks until available)  |
 | 4  | write  | in: byte sent to USB serial                              |
+| 28 | fstat  | out: bit0 = RDRF (RX byte available), bit1 = TDRE (TX can accept a byte) |
+| 43 | times  | reserved, not implemented (stops with `BAD OP 2B`)       |
 
 The status bits follow the low two bits of a 6850 ACIA status register.
 Bits 7..2 are returned as 0. TDRE is "USB connected and the CDC write FIFO
 has room" (set USE_TUD_TX_STATUS to 0 to use "USB connected" only).
-The read and status results are written to R0 as a zero-extended 16-bit value
+The read and fstat results are written to R0 as a zero-extended 16-bit value
 (the high byte is cleared); the write syscall uses only the low byte of R0.
 
 Resume rewrites R15 with the value it already holds (low byte, then high
@@ -341,6 +344,7 @@ the end is cut off there.
 | `d saddr,eaddr` | dump `saddr` <= a <= `eaddr` (inclusive) |
 | `r` | R0-R15, SFR, PBR, CBR (PBR and CBR read as `n/a` on the MC1, where they are not readable) |
 | `g` | resume the GSU after the exit, as if it were any other syscall (not possible before the first `l`) |
+| `t` | like `g`, and at the next exit also print the elapsed time: `time 12.345 ms (GSU run 12.100 ms, 34 syscalls)`: wall time from the resume to the exit (it includes waiting for USB in read and write syscalls), the time the GSU itself ran, and the number of syscalls. To time only the program, let it exit once at its start, load, then `t` to the final exit (the loading time is not counted). `l` does not start a timer |
 | `l` | load: boot the loader (prints `READY`, then send a program); also reloads after an exit |
 | `c 0` / `c 1` | GSU clock 10.7 MHz (default) / 21.4 MHz; applied at the next `l`, or at `g` after an exit if it changed (CFGR/CLSR are written only when the value changed); refused while `m 1` is set |
 | `m 0` / `m 1` | multiplier standard (default) / high speed (CFGR.MS0); applied at the next `l` or `g` (same rule); refused while the clock is 21.4 MHz |
@@ -397,12 +401,12 @@ so every `g` returns to the monitor): type `l`, wait for `READY`, send it, then 
 ## Echo demo (`tools/echo_demo.load`)
 
 A 21-byte program for the loader (load and entry `$0200`): it waits until
-RDRF is set (status syscall), reads a byte, adds 1, and writes it back, so
+RDRF is set (fstat syscall), reads a byte, adds 1, and writes it back, so
 each character you type returns as character + 1. Type `l`, wait for `READY`,
 then send the file. (Confirmed earlier as a cache-resident build: typing `123`
-returns `234`.) Each byte costs three syscalls (status, read, write), about
+returns `234`.) Each byte costs three syscalls (fstat, read, write), about
 37 us, so the echo loop tops out near 27 KB/s. Bytes, `$0200`:
-`A3 02 00 01 3E 71 09 F8 01 A3 03 00 01 D0 A3 04 00 01 05 EC 01`. It is
+`A3 1C 00 01 3E 71 09 F8 01 A3 03 00 01 D0 A3 04 00 01 05 EC 01`. It is
 checked in `tools/gsusim.py`.
 
 ## Diagnostics (`-DGSU_DIAG=1`)
@@ -612,7 +616,7 @@ Confirmed on the cart:
 - Cache write/readback, GO set by the R15 high byte, running from the cache
   (CBR=0), STOP leaving R15 = STOP + 2, resume by rewriting R15, at 21 MHz and
   at 10.7 MHz.
-- Syscalls read, write and status (echo demo), USB serial round trip.
+- Syscalls read, write and status (echo demo, before the status call became fstat), USB serial round trip.
 - The RAM loader: payload received, stored with STB, LJMP to bank $70 and
   execution from cart RAM, with the loaded program using the syscalls, through
   the two-stage boot on the GSU-1 (VCR=04) and the MC1 (10.7 MHz).
@@ -622,6 +626,13 @@ Confirmed on the cart:
 - The monitor at start-up (`mon> `): `l` loads the loader (`READY`), `i` prints
   the banner, `c 0|1` and `m 0|1` set the clock and MS0 with the refusals between
   `c 1` and `m 1` (on the GSU-1 and the MC1).
+- The exit syscall, `r`, `g`, `t` (elapsed time at the next exit; an echo program
+  waiting for a key: 1022 ms wall, 176 ms GSU run, 48903 fstat polls, about
+  21 us per syscall) and `l` after an exit, on the MC1 and the GSU-1; `d` on the
+  GSU-1; `c` / `m` with `t` on the GSU-1 (the program keeps working).
+- The `t` figure "GSU run" has a floor of about 1.9 us per syscall (the Pico
+  polls SFR over the slow bus), the same at 10.7 and 21.4 MHz. It is accurate
+  for long computations between syscalls, not for syscall-heavy loops.
 - Throughput of the syscall path (measurement build).
 - The Pico SDK build, including `tusb.h` for `USE_TUD_TX_STATUS`.
 - The GSU clock source is the oscillator on the cart; the chip is a GSU-1
@@ -638,41 +649,48 @@ Confirmed on the cart:
 Confirmed by the hang test: an STB or STW followed by STOP with at most one
 instruction (NOP) in between hangs the MC1 but not the GSU-1; two are enough.
 
-Still to verify (implemented in the firmware, not yet run on hardware; marked
-`[VERIFY]` in the code):
+Still to verify:
 
-1. A10-A14 on GP21-GP25: confirmed. The diagnostic build passes all checks on
-   the GSU-1 and the GSU-2, and [1]-[5] pass on the MC1, with the Pico driving
-   the five lines.
-2. The RAM window: confirmed on the GSU-1 and the GSU-2 (the first version of
-   diag [8], host write through the window and read back, passes on both), and
-   found not to work on the MC1 (board 1C0N, 10.7 MHz). Full diag [8] on the MC1:
-   reads give a constant 00 whatever the data lines were pre-driven to (a bus
-   pulled low, or the cart driving 00), or the stale 10 (the SCMR value written
-   just before); a byte the GSU stored (5A) is never seen, with SCMR = 00, 08, 10
-   or 18 (8.5); and bytes the host writes through the window never reach RAM
-   (8.4: the GSU's LDB at $0020 returned the same 1C after writes of 3C and C3).
-   The registers stay reachable. So with /ROMSEL held high the S-CPU window
-   $6000-$7FFF shows no RAM on the MC1, in either direction. Most likely the MC1
-   maps its RAM only at $70-$71 (where the S-CPU reaches it with /ROMSEL low); not
-   tested. The monitor's `d` is therefore disabled when the firmware sees VCR=01
-   (it prints a notice). Options if the MC1 needs it: drive A20, A21 and A22
-   together from one GPIO (bank $70) and /ROMSEL from another (two more pins,
-   GP26 and GP27), or read RAM with a GSU program into the registers (works on
-   every chip; not built).
-3. The exit syscall (R3=1) and the monitor commands `r`, `g` and `d` (on the
-   GSU-1 and GSU-2).
-4. Changing the clock or MS0 with `c` / `m` and `g` after an exit (CLSR/CFGR
-   written between a STOP and the resume).
-5. CFGR.MS0 on the GSU-2 (measured on the GSU-1A only; the GSU-2 is assumed to
-   behave the same, see "Multiplier speed").
+1. That `c` / `m` really change the clock and MS0 after an exit (`t` or `g`):
+   the commands run and the program keeps working, but the effect is not
+   measured (the "GSU run" figure of `t` is dominated by polling latency for
+   syscall-heavy programs).
+2. CBR on the GSU-1: `r` shows `CBR=0040` after a program loaded and entered at
+   `$0200` (LJMP to $0200 should give $0200). If the cache window really starts
+   at $0040, only the first 64 bytes of a program at $0200 are cached, which
+   would also explain why the measured multiplier cycle counts are close to the
+   ROM/RAM column of the documentation. A NOP-loop test of the cached span
+   would tell (not built).
 
+Not tested, assumed like the GSU-1 (VCR=04 family): the monitor and CFGR.MS0 on the
+GSU-2. A10-A14 and the RAM window are confirmed on the GSU-2 (diag).
+
+Confirmed with the A10-A14 pins: all diagnostic checks pass on the GSU-1 and the
+GSU-2, and [1]-[5] pass on the MC1.
+
+The RAM window: confirmed on the GSU-1 and the GSU-2 (the first version of
+diag [8], host write through the window and read back, passes on both), and
+found not to work on the MC1 (board 1C0N, 10.7 MHz). Full diag [8] on the MC1:
+reads give a constant 00 whatever the data lines were pre-driven to (a bus
+pulled low, or the cart driving 00), or the stale 10 (the SCMR value written
+just before); a byte the GSU stored (5A) is never seen, with SCMR = 00, 08, 10
+or 18 (8.5); and bytes the host writes through the window never reach RAM
+(8.4: the GSU's LDB at $0020 returned the same 1C after writes of 3C and C3).
+The registers stay reachable. So with /ROMSEL held high the S-CPU window
+$6000-$7FFF shows no RAM on the MC1, in either direction. Most likely the MC1
+maps its RAM only at $70-$71 (where the S-CPU reaches it with /ROMSEL low); not
+tested. The monitor's `d` is therefore disabled when the firmware sees VCR=01
+(it prints a notice). Options if the MC1 needs it: drive A20, A21 and A22
+together from one GPIO (bank $70) and /ROMSEL from another (two more pins,
+GP26 and GP27), or read RAM with a GSU program into the registers (works on
+every chip; not built).
 (Loader speed and `BUS_DELAY_CYCLES` tuning moved to "Optimization ideas".)
 
 Open questions, cause unknown (no action planned; notes and ideas for
 investigating each are in `docs/cache-and-chip-notes.ja.md`, section 5):
 
 - The MC1 runs away at 21 MHz in long programs (short diagnostics pass).
+- The GSU-1 shows CBR=0040 for a program entered at $0200 (see "Still to verify").
 - Why the MC1 uses host-written cache code only in the block that ran last.
 - Why SFR reads 8000 after STOP on the MC1 (0000 on the GSU-1); harmless, the
   firmware clears it.

@@ -77,7 +77,7 @@ class GSU:
             prefix_clear()
 
 def host(g, rx, steps=200000, exits=None):
-    """Fake firmware. The syscall number is R3 low: 0 nop, 1 exit, 2 status, 3 read,
+    """Fake firmware. The syscall number is R3 low: 0 nop, 1 exit, 28 fstat, 3 read,
     4 write. Exit is recorded in `exits` as (output position, R15) and then resumed,
     like the monitor's "g"."""
     out=[]; rx=list(rx)
@@ -87,7 +87,7 @@ def host(g, rx, steps=200000, exits=None):
             if not rx: return out,'rx-empty'
             g.r[0]=rx.pop(0)       # host writes R0 as a zero-extended 16-bit value
         elif op==4: out.append(g.r[0]&0xFF)
-        elif op==2: g.r[0]=(1 if rx else 0)
+        elif op==28: g.r[0]=(1 if rx else 0)
         elif op==0: pass
         elif op==1:
             assert exits is not None, "unexpected exit"
@@ -136,7 +136,7 @@ print("exit_test.load: %d exits at R15=%04X"%(len(ex),ex[0][1]))
 # --- A10-A14 mapping used for the RAM window and the register window
 def _def(n): return int(re.search(r"#define\s+%s\s+(0x[0-9A-Fa-f]+|\d+)"%n,_SRC).group(1),0)
 AH_REGS,AH_RAM,PIN_A10=_def("AH_REGS"),_def("AH_RAM"),_def("PIN_A10")
-assert PIN_A10==21 and (_def("SYS_NOP"),_def("SYS_EXIT"),_def("SYS_READ"),_def("SYS_WRITE"))==(0,1,3,4)
+assert PIN_A10==21 and (_def("SYS_NOP"),_def("SYS_EXIT"),_def("SYS_READ"),_def("SYS_WRITE"),_def("SYS_FSTAT"),_def("SYS_TIMES"))==(0,1,3,4,28,43)
 assert AH_REGS<<10 | 0 == 0x3000 and (AH_REGS<<10)+0x3FF < 0x3400, "register window"
 for off in range(0x2000):                    # the formula of ram_addr_bits()
     a=(off&0x3FF) | ((AH_RAM|((off>>10)&7))<<10)

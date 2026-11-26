@@ -4,6 +4,21 @@ Newest first. "Confirmed" means run on hardware (GSU-1 = 1CA6B-01 VCR=04,
 GSU-2 = 1CB5B-01 VCR=04, MC1 = 1C0N VCR=01); anything else is in the README
 under "Still to verify".
 
+## 1.3.0
+
+Verified on a GSU-1 and the MC1 (the GSU-2 was not run with the monitor and is
+assumed like the GSU-1). Open: the effect of `c` / `m` is not measured, and the
+GSU-1 reads CBR=0040 for a program entered at `$0200` (README "Still to verify").
+
+- Changed (breaking): the status syscall is now `fstat` with number 28 (was
+  STATUS 2). Programs that call status must use `IBT R3,#28`
+  (`tools/echo_demo.load` is updated). Number 2 now stops with `BAD OP`.
+- Added: syscall number 43 `times` is reserved (not implemented; `BAD OP`).
+- Added: monitor command `t`: like `g`, and at the next exit it prints
+  `time 12.345 ms (GSU run 12.100 ms, 34 syscalls)`: wall time from the resume
+  to the exit, the time the GSU itself ran (resume to STOP, summed), and the
+  syscall count. Confirmed on the MC1 and the GSU-1. The "GSU run" figure includes about 1.9 us of polling latency per syscall.
+
 ## 1.2.2
 
 MARIO chip (MC1) reload fix.
