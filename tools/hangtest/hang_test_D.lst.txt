@@ -1,14 +1,14 @@
             start:
             ph_D:
 0200  A0 44     IBT R0,#$44
-0202  A1 01     IBT R1,#$01
+0202  A3 04     IBT R3,#$04
 0204  00 01     STOP ; NOP (dummy byte after STOP)
-0206  A1 03     IBT R1,#$03
+0206  A3 00     IBT R3,#$00
 0208  F2 10 27  IWT R2,#$2710
-020B  F3 00 04  IWT R3,#$0400
+020B  F5 00 04  IWT R5,#$0400
 020E  A0 55     IBT R0,#$55
             lp_D:
-0210  3D 33     ALT1 ; STB (R3)
+0210  3D 35     ALT1 ; STB (R5)
 0212  01        NOP
 0213  01        NOP
 0214  01        NOP
@@ -18,25 +18,25 @@
 0219  08 F5     BNE lp_D
 021B  01        NOP ; branch delay slot
 021C  A0 64     IBT R0,#$64
-021E  A1 01     IBT R1,#$01
+021E  A3 04     IBT R3,#$04
 0220  00 01     STOP ; NOP (dummy byte after STOP)
 0222  A0 45     IBT R0,#$45
-0224  A1 01     IBT R1,#$01
+0224  A3 04     IBT R3,#$04
 0226  00 01     STOP ; NOP (dummy byte after STOP)
 0228  A0 4E     IBT R0,#$4E
-022A  A1 01     IBT R1,#$01
+022A  A3 04     IBT R3,#$04
 022C  00 01     STOP ; NOP (dummy byte after STOP)
 022E  A0 44     IBT R0,#$44
-0230  A1 01     IBT R1,#$01
+0230  A3 04     IBT R3,#$04
 0232  00 01     STOP ; NOP (dummy byte after STOP)
 0234  A0 0D     IBT R0,#$0D
-0236  A1 01     IBT R1,#$01
+0236  A3 04     IBT R3,#$04
 0238  00 01     STOP ; NOP (dummy byte after STOP)
 023A  A0 0A     IBT R0,#$0A
-023C  A1 01     IBT R1,#$01
+023C  A3 04     IBT R3,#$04
 023E  00 01     STOP ; NOP (dummy byte after STOP)
             wait:
-0240  A1 00     IBT R1,#$00
+0240  A3 03     IBT R3,#$03
 0242  00 01     STOP ; NOP (dummy byte after STOP)
 0244  05 FA     BRA wait
 0246  01        NOP ; branch delay slot

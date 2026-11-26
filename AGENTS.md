@@ -1,4 +1,4 @@
-# AGENTS.md — gsu-host
+# AGENTS.md — gsu-host (v1.2.2)
 
 Notes for AI agents (and humans) picking this project up. `README.md` is the
 user-facing doc (wiring, protocol, usage); this file covers how to work on it.
@@ -6,9 +6,12 @@ user-facing doc (wiring, protocol, usage); this file covers how to work on it.
 ## What this is
 
 RP2040 (Pico 1) firmware that acts as the S-CPU for a real Super FX (GSU)
-cartridge, using the GSU as a stand-alone processor. The Pico touches only
-the GSU register window ($3000-$32FF). GSU programs run from the instruction
-cache or cart RAM and use STOP as a system call into USB serial.
+cartridge, using the GSU as a stand-alone processor. The Pico drives the GSU
+register window ($3000-$32FF) and, for the debug monitor, reads the cart RAM
+window ($6000-$7FFF) while the GSU is stopped (A10-A14 are on GP21-GP25). The
+loader always runs from cart RAM ($0000-$004F, entered through a 15-byte stage 1
+in the cache); programs run from cart RAM and the cache and use STOP as a
+system call into USB serial (0 read, 1 write, 2 status, 3 nop, 4 exit).
 
 ## Layout
 
@@ -17,10 +20,13 @@ cache or cart RAM and use STOP as a system call into USB serial.
 | `gsu_host.c`          | all firmware: bus layer, GSU programs (byte arrays), syscall loop |
 | `CMakeLists.txt`      | Pico SDK build (needs `PICO_SDK_PATH`) |
 | `README.md`           | wiring, loader protocol, syscall table, verification status, optimization ideas |
+| `CHANGELOG.md`        | release notes from 1.0.0; add an entry for every version |
 | `docs/cache-and-chip-notes.ja.md` | Japanese notes: GSU cache behaviour and GSU-1 vs MC1 measurements |
 | `tools/check.sh`      | syntax check (both program modes) + simulator run |
-| `tools/gsusim.py`     | mini GSU simulator; reads `loader_prog` / `demo_prog` from `gsu_host.c` |
+| `tools/gsusim.py`     | mini GSU simulator; reads the programs and the A10-A14 constants from `gsu_host.c`; models stage 1 + loader, exit, echo demo, measure, hang test |
 | `tools/hangtest/`     | `make.py` builds `hang_test.load` (STB/STW-then-STOP test, load at $0200); checked in `gsusim.py` |
+| `tools/multest/`      | `make.py` builds `mul_bench.load` (MULT/UMULT/FMULT/LMULT timing, for CFGR.MS0); `run.py` times it from a PC (pyserial; not run on hardware) |
+| `tools/exit_test.load` | 7-byte program (exit in a loop) for trying the monitor; checked in `gsusim.py` |
 | `tools/stubs/`        | stub Pico SDK headers, only for the syntax check |
 
 ## Status: confirmed on a GSU-1 and an MC1, including the loader
@@ -36,9 +42,14 @@ write 1712 ns, BUS_DELAY_CYCLES 64 at 125 MHz; 7 bus accesses per syscall).
 The RAM loader and LJMP also work: the user loaded a binary build of the echo
 program and it ran. `tools/check.sh` proves the
 C parses and that the programs behave on a simulator written from reading the
-docs; it does not prove hardware behaviour. No `[VERIFY]` markers remain in
-the code; if you add something that has not been run on hardware, mark it
-`[VERIFY]` and list it in the README verification status.
+docs; it does not prove hardware behaviour. `[VERIFY]` marks code that has not
+been run on hardware: the exit syscall and the monitor commands `r`, `g`, `d`
+(the start-up monitor with `l`, `i`, `c`, `m` and the loader from RAM are confirmed on the GSU-1 and MC1; listed under "Still to verify" in the README). The A10-A14 pins
+and the RAM window (host write/readback) are confirmed on the GSU-1 and GSU-2,
+but not on the MC1: the S-CPU window neither reads nor writes RAM there (diag
+[8].2-.5), so the monitor's `d` is disabled when VCR=01 (MC1). Likely
+the MC1 maps RAM only at $70-$71 (untested). Diag [8].1 cannot tell a pulled-low
+bus from a driving cart. Mark anything new the same way and list it there.
 
 MC1 (MARIO chip, board 1C0N, VCR=01, external clock and /ROMSEL): the
 diagnostic build passes the basics at both clocks and 21 MHz works (clock check
@@ -46,22 +57,24 @@ ratio 2.00). Host-written cache code is used only inside the block that ran
 last (diag [7] confirmed; entering another block reads ROM). First seen as "only reliable in line 0": diag [6] shows
 starts in other lines, or after writing two lines, execute ROM bytes; the
 32-byte echo demo fails on its second pass (`BAD OP FF R15=0039`). Cause
-unknown. `-DGSU_BOOT_STAGE1=1` is the workaround: 15-byte `boot_prog` in line 0
-pulls `loader_prog` (served by the firmware) into RAM and LJMPs to $70:0000.
-Confirmed on the MC1 at 10.7 MHz: the echo binary loaded through it and ran. At 21 MHz
-the loader build ran away (TIMEOUT, SFR=0020), so use `-DGSU_MC1=1` (two-stage
-boot + 10.7 MHz). Do not add cache programs
-longer than 16 bytes for the MC1. In that mode the loader occupies RAM
-$0000-$004F, so payloads must load at $0050 or above. `-DGSU_CLOCK_21MHZ=0` selects 10.7 MHz.
+unknown. The workaround is now the only boot path on every chip: 15-byte
+`boot_prog` in line 0 pulls `loader_prog` (served by the firmware) into RAM and
+LJMPs to $70:0000. Confirmed on the MC1 at 10.7 MHz: the echo binary loaded
+through it and ran. At 21 MHz the loader build ran away (TIMEOUT, SFR=0020), so
+use the default 10.7 MHz (monitor `c 0`). Do not add cache programs longer than 16 bytes for
+the MC1. The loader occupies RAM $0000-$004F, so payloads must load at $0050 or
+above (convention: $0200). The clock is chosen in the monitor (`c 0|1`, default 10.7 MHz).
 
 ## Rules for changes
 
 0. Project convention for loadable programs and test binaries: load and entry
-   address `$0200`; `$0000-$01FF` is scratch RAM for variables (LMS/SMS reach
+   address `$0200`; `$0050-$01FF` is scratch RAM for variables (LMS/SMS reach
    it with 2-byte instructions) and its contents at start are undefined.
+   `$0000-$004F` holds the loader and must not be written: on the MC1, `l`
+   after a program has run restarts it from there (`gsu_boot(true)`).
    Examples and new tools use this unless there is a reason not to.
 1. Run `tools/check.sh` after every edit to `gsu_host.c`.
-2. `loader_prog` and `demo_prog` are hand-assembled. The comment above each
+2. `loader_prog`, `boot_prog` and `measure_prog` are hand-assembled. The comment above each
    array, the bytes, and the README must agree. The simulator reads the
    bytes from the C file, so a wrong byte shows up there, but a wrong
    comment does not.
@@ -101,32 +114,56 @@ $0000-$004F, so payloads must load at $0050 or above. `-DGSU_CLOCK_21MHZ=0` sele
   byte). This is deliberately the most general and safest method, works for
   code at any address, and the user chose it over a single high-byte write
   that would save a few bus accesses. Do not "optimize" it without asking.
-- Completion is detected by polling SFR.GO, not /IRQ.
-- Syscalls are R1 low byte = op, R0 low byte = data: 0 read, 1 write,
-  2 status (bit0 RDRF, bit1 TDRE, like a 6850 ACIA's low status bits). Read
+- Completion is detected by polling SFR.GO, not /IRQ. There is no timeout by default: long-running programs are normal and a TIMEOUT message would corrupt the binary stream (it did, in the multiplier benchmark). `-DGSU_WATCHDOG_MS=500` turns the message on for hang hunting.
+- Syscalls are R3 low byte = op, R0 low byte = data, numbered like Unix where
+  there is a counterpart: 0 nop, 1 exit (enters the monitor: d dump RAM, r regs,
+  g resume, l reload), 2 status (bit0 RDRF, bit1 TDRE, like a 6850 ACIA's low
+  status bits), 3 read, 4 write. R3 is therefore reserved for the syscall
+  number in GSU programs (the loader keeps its RAM pointer in R1; the hang test
+  and multiplier benchmark use R5). Read
   and status results are written to R0 as zero-extended 16-bit values.
-- The default program is the RAM loader; `-DGSU_PROGRAM_DEMO=1` selects the
-  +1 echo demo; `-DGSU_DIAG=1` (wins over all; PASS/FAIL checks, text only; use it first on any new wiring);
+- A10-A14 are Pico outputs (GP21-GP25): AH_REGS (register window) all the time,
+  AH_RAM only inside `ram_read()`, which also sets SCMR.RAN=0 and restores it.
+  The firmware has no clock output (GP21 was the optional clock pin; the
+  RP2040's clock output pins are the A10-A14 lines now).
+- The clock and CFGR bit 5 (MS0, multiplier speed) are runtime settings of the
+  monitor (`c 0|1`, `m 0|1`; defaults 10.7 MHz and standard), applied in
+  `gsu_boot()` (always) and at the monitor's `g` (`gsu_apply_config(false)`, only
+  what changed; [VERIFY]); `c 1` and `m 1` refuse each other. The MC1 is detected from
+  VCR=01 (only used to disable `d` and warn on `c 1`). There are no
+  `GSU_MC1`, `GSU_CLOCK_21MHZ` or `GSU_MS0` defines any more. The diagnostic build
+  uses CLSR=01 and CFGR=80 itself. Measured (README "Multiplier speed"): on the GSU-1A at
+  10.7 MHz it makes UMULT/FMULT/LMULT 3-4 cycles faster (FMULT 1050 -> 677 ns);
+  the MC1 ignores it; the GSU-2 is assumed like the GSU-1A (not measured). 21.4 MHz
+  speeds up multiplies by only 8-15 % in time (the cycle counts rise).
+- The loader build starts in the monitor after reset and loads only on `l`
+  (`monitor(false)`, then `gsu_boot()`); the measure build starts the GSU
+  directly and runs from the cache. Loading is always two-stage (`gsu_boot()`).
+- The default program is the stage-1 boot into the RAM loader; `-DGSU_DIAG=1` (wins over all; PASS/FAIL checks, text only; use it first on any new wiring);
   `-DGSU_MEASURE=1` (wins over the others) selects the
-  throughput measurement build (syscall 3 = NOP, report printed once, no
+  throughput measurement build (syscall 0 = NOP, report printed once, no
   prints during the timed loop). Output after the `READY\r\n` line is raw binary, so do not
   add debug prints after it.
 
 ## Not done yet
 
-- The echo demo was cross-checked with bass (bytes match, runs on both chips);
+- The echo demo (`tools/echo_demo.load`) was cross-checked with bass (bytes match, runs on both chips);
   `loader_prog` and `boot_prog` were not, but they run on the cart.
 - The README open questions (causes unknown, no action planned). Speed work (BUS_DELAY_CYCLES tuning, loader timing, block
   syscalls) is only noted under "Optimization ideas" in the README.
-- Pin handling in the README wiring section is from the SNESdev wiki
-  pinout, overridden by the user's PCB inspection of board 1CA6B-01. The
-  two 8-pin expansion groups, pins 1-4/32-35 and 28-31/59-62 (SYSTEM CLK,
-  EXPAND, PA0-PA7, /PRD, /PWR, /WRAMSEL, REFRESH, audio L/R), are confirmed
-  unused and unconnected, so all 16 stay open. PHI2, A23 and /CART are
-  unconnected; the CIC is not connected to the Super FX; the clock
-  oscillator is on the cart. No pin is left unverified, and the fixed A10-A22 levels are confirmed to
-  select the GSU registers. Other boards may differ. The chip on 1CA6B-01 is
-  a GSU-1 (user-reported), so it is not the MC1. The
-  MC1 hang reported for an STB immediately followed by STOP was reproduced with `tools/hangtest/` (MC1 hangs with 0 or 1 NOP between the write and STOP, 2 or more are fine; GSU-1 no hang); the loader and stage 1 keep
-  several instructions between STB and the next STOP.
+- Pin handling in the README wiring section is from the SNESdev wiki pinout,
+  overridden by the user's PCB inspection. Three boards are recorded in the
+  README ("Boards and chips"): 1C0N (MC1; external clock; /ROMSEL connected;
+  A23 not), 1CA6B-01 (GSU-1A; A23 and /ROMSEL not connected) and 1CB5B-01
+  (GSU-2; A23 connected). One wiring serves all: A23 low, /ROMSEL high,
+  A15-A22 low. The 16 expansion-terminal pins are unconnected on all three boards (SYSTEM
+  CLK on 1C0N excepted); PHI2 is unconnected on all three; every cart has a CIC but it is not connected to the Super FX, so the CIC pins stay open. GSU-2
+  (VCR=04) also worked with A23 open; tie it to GND anyway. The MC1 hang reported for an STB
+  immediately followed by STOP was reproduced with `tools/hangtest/` (MC1 hangs
+  with 0 or 1 NOP between the write and STOP, 2 or more are fine; GSU-1 no
+  hang); the loader and stage 1 keep several instructions between STB and the
+  next STOP.
+- The debug monitor is minimal (d, r, g, l). More commands (poke, breakpoints,
+  step) are the user's next step; `ram_write()` exists only in the diagnostic
+  build.
 - PC-side sender for the loader protocol (the user is writing their own app).

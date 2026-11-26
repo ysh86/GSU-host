@@ -1,0 +1,224 @@
+            start:
+0200  A0 4E     IBT R0,#$4E
+0202  A3 04     IBT R3,#$04
+0204  00 01     STOP ; NOP (dummy byte after STOP)
+0206  F0 23 01  IWT R0,#$0123
+0209  A5 03     IBT R5,#$03
+020B  F6 21 43  IWT R6,#$4321
+020E  F2 FF FF  IWT R2,#$FFFF
+            lp_N:
+0211  01        NOP
+0212  01        NOP
+0213  01        NOP
+0214  01        NOP
+0215  01        NOP
+0216  01        NOP
+0217  01        NOP
+0218  01        NOP
+0219  01        NOP
+021A  01        NOP
+021B  01        NOP
+021C  01        NOP
+021D  01        NOP
+021E  01        NOP
+021F  01        NOP
+0220  01        NOP
+0221  01        NOP
+0222  01        NOP
+0223  01        NOP
+0224  01        NOP
+0225  01        NOP
+0226  01        NOP
+0227  01        NOP
+0228  01        NOP
+0229  01        NOP
+022A  01        NOP
+022B  01        NOP
+022C  01        NOP
+022D  01        NOP
+022E  01        NOP
+022F  01        NOP
+0230  01        NOP
+0231  E2        DEC R2
+0232  08 DD     BNE lp_N
+0234  01        NOP ; branch delay slot
+0235  A0 4D     IBT R0,#$4D
+0237  A3 04     IBT R3,#$04
+0239  00 01     STOP ; NOP (dummy byte after STOP)
+023B  F0 23 01  IWT R0,#$0123
+023E  A5 03     IBT R5,#$03
+0240  F6 21 43  IWT R6,#$4321
+0243  F2 FF FF  IWT R2,#$FFFF
+            lp_M:
+0246  85        MULT R5
+0247  85        MULT R5
+0248  85        MULT R5
+0249  85        MULT R5
+024A  85        MULT R5
+024B  85        MULT R5
+024C  85        MULT R5
+024D  85        MULT R5
+024E  85        MULT R5
+024F  85        MULT R5
+0250  85        MULT R5
+0251  85        MULT R5
+0252  85        MULT R5
+0253  85        MULT R5
+0254  85        MULT R5
+0255  85        MULT R5
+0256  85        MULT R5
+0257  85        MULT R5
+0258  85        MULT R5
+0259  85        MULT R5
+025A  85        MULT R5
+025B  85        MULT R5
+025C  85        MULT R5
+025D  85        MULT R5
+025E  85        MULT R5
+025F  85        MULT R5
+0260  85        MULT R5
+0261  85        MULT R5
+0262  85        MULT R5
+0263  85        MULT R5
+0264  85        MULT R5
+0265  85        MULT R5
+0266  E2        DEC R2
+0267  08 DD     BNE lp_M
+0269  01        NOP ; branch delay slot
+026A  A0 55     IBT R0,#$55
+026C  A3 04     IBT R3,#$04
+026E  00 01     STOP ; NOP (dummy byte after STOP)
+0270  F0 23 01  IWT R0,#$0123
+0273  A5 03     IBT R5,#$03
+0275  F6 21 43  IWT R6,#$4321
+0278  F2 FF FF  IWT R2,#$FFFF
+            lp_U:
+027B  3D 85     ALT1 ; MULT R5   (UMULT R5)
+027D  3D 85     ALT1 ; MULT R5   (UMULT R5)
+027F  3D 85     ALT1 ; MULT R5   (UMULT R5)
+0281  3D 85     ALT1 ; MULT R5   (UMULT R5)
+0283  3D 85     ALT1 ; MULT R5   (UMULT R5)
+0285  3D 85     ALT1 ; MULT R5   (UMULT R5)
+0287  3D 85     ALT1 ; MULT R5   (UMULT R5)
+0289  3D 85     ALT1 ; MULT R5   (UMULT R5)
+028B  3D 85     ALT1 ; MULT R5   (UMULT R5)
+028D  3D 85     ALT1 ; MULT R5   (UMULT R5)
+028F  3D 85     ALT1 ; MULT R5   (UMULT R5)
+0291  3D 85     ALT1 ; MULT R5   (UMULT R5)
+0293  3D 85     ALT1 ; MULT R5   (UMULT R5)
+0295  3D 85     ALT1 ; MULT R5   (UMULT R5)
+0297  3D 85     ALT1 ; MULT R5   (UMULT R5)
+0299  3D 85     ALT1 ; MULT R5   (UMULT R5)
+029B  3D 85     ALT1 ; MULT R5   (UMULT R5)
+029D  3D 85     ALT1 ; MULT R5   (UMULT R5)
+029F  3D 85     ALT1 ; MULT R5   (UMULT R5)
+02A1  3D 85     ALT1 ; MULT R5   (UMULT R5)
+02A3  3D 85     ALT1 ; MULT R5   (UMULT R5)
+02A5  3D 85     ALT1 ; MULT R5   (UMULT R5)
+02A7  3D 85     ALT1 ; MULT R5   (UMULT R5)
+02A9  3D 85     ALT1 ; MULT R5   (UMULT R5)
+02AB  3D 85     ALT1 ; MULT R5   (UMULT R5)
+02AD  3D 85     ALT1 ; MULT R5   (UMULT R5)
+02AF  3D 85     ALT1 ; MULT R5   (UMULT R5)
+02B1  3D 85     ALT1 ; MULT R5   (UMULT R5)
+02B3  3D 85     ALT1 ; MULT R5   (UMULT R5)
+02B5  3D 85     ALT1 ; MULT R5   (UMULT R5)
+02B7  3D 85     ALT1 ; MULT R5   (UMULT R5)
+02B9  3D 85     ALT1 ; MULT R5   (UMULT R5)
+02BB  E2        DEC R2
+02BC  08 BD     BNE lp_U
+02BE  01        NOP ; branch delay slot
+02BF  A0 46     IBT R0,#$46
+02C1  A3 04     IBT R3,#$04
+02C3  00 01     STOP ; NOP (dummy byte after STOP)
+02C5  F0 23 01  IWT R0,#$0123
+02C8  A5 03     IBT R5,#$03
+02CA  F6 21 43  IWT R6,#$4321
+02CD  F2 FF FF  IWT R2,#$FFFF
+            lp_F:
+02D0  9F        FMULT
+02D1  9F        FMULT
+02D2  9F        FMULT
+02D3  9F        FMULT
+02D4  9F        FMULT
+02D5  9F        FMULT
+02D6  9F        FMULT
+02D7  9F        FMULT
+02D8  9F        FMULT
+02D9  9F        FMULT
+02DA  9F        FMULT
+02DB  9F        FMULT
+02DC  9F        FMULT
+02DD  9F        FMULT
+02DE  9F        FMULT
+02DF  9F        FMULT
+02E0  9F        FMULT
+02E1  9F        FMULT
+02E2  9F        FMULT
+02E3  9F        FMULT
+02E4  9F        FMULT
+02E5  9F        FMULT
+02E6  9F        FMULT
+02E7  9F        FMULT
+02E8  9F        FMULT
+02E9  9F        FMULT
+02EA  9F        FMULT
+02EB  9F        FMULT
+02EC  9F        FMULT
+02ED  9F        FMULT
+02EE  9F        FMULT
+02EF  9F        FMULT
+02F0  E2        DEC R2
+02F1  08 DD     BNE lp_F
+02F3  01        NOP ; branch delay slot
+02F4  A0 4C     IBT R0,#$4C
+02F6  A3 04     IBT R3,#$04
+02F8  00 01     STOP ; NOP (dummy byte after STOP)
+02FA  F0 23 01  IWT R0,#$0123
+02FD  A5 03     IBT R5,#$03
+02FF  F6 21 43  IWT R6,#$4321
+0302  F2 FF FF  IWT R2,#$FFFF
+            lp_L:
+0305  3D 9F     ALT1 ; FMULT     (LMULT)
+0307  3D 9F     ALT1 ; FMULT     (LMULT)
+0309  3D 9F     ALT1 ; FMULT     (LMULT)
+030B  3D 9F     ALT1 ; FMULT     (LMULT)
+030D  3D 9F     ALT1 ; FMULT     (LMULT)
+030F  3D 9F     ALT1 ; FMULT     (LMULT)
+0311  3D 9F     ALT1 ; FMULT     (LMULT)
+0313  3D 9F     ALT1 ; FMULT     (LMULT)
+0315  3D 9F     ALT1 ; FMULT     (LMULT)
+0317  3D 9F     ALT1 ; FMULT     (LMULT)
+0319  3D 9F     ALT1 ; FMULT     (LMULT)
+031B  3D 9F     ALT1 ; FMULT     (LMULT)
+031D  3D 9F     ALT1 ; FMULT     (LMULT)
+031F  3D 9F     ALT1 ; FMULT     (LMULT)
+0321  3D 9F     ALT1 ; FMULT     (LMULT)
+0323  3D 9F     ALT1 ; FMULT     (LMULT)
+0325  3D 9F     ALT1 ; FMULT     (LMULT)
+0327  3D 9F     ALT1 ; FMULT     (LMULT)
+0329  3D 9F     ALT1 ; FMULT     (LMULT)
+032B  3D 9F     ALT1 ; FMULT     (LMULT)
+032D  3D 9F     ALT1 ; FMULT     (LMULT)
+032F  3D 9F     ALT1 ; FMULT     (LMULT)
+0331  3D 9F     ALT1 ; FMULT     (LMULT)
+0333  3D 9F     ALT1 ; FMULT     (LMULT)
+0335  3D 9F     ALT1 ; FMULT     (LMULT)
+0337  3D 9F     ALT1 ; FMULT     (LMULT)
+0339  3D 9F     ALT1 ; FMULT     (LMULT)
+033B  3D 9F     ALT1 ; FMULT     (LMULT)
+033D  3D 9F     ALT1 ; FMULT     (LMULT)
+033F  3D 9F     ALT1 ; FMULT     (LMULT)
+0341  3D 9F     ALT1 ; FMULT     (LMULT)
+0343  3D 9F     ALT1 ; FMULT     (LMULT)
+0345  E2        DEC R2
+0346  08 BD     BNE lp_L
+0348  01        NOP ; branch delay slot
+0349  A0 45     IBT R0,#$45
+034B  A3 04     IBT R3,#$04
+034D  00 01     STOP ; NOP (dummy byte after STOP)
+            wait:
+034F  A3 03     IBT R3,#$03
+0351  00 01     STOP ; NOP (dummy byte after STOP)
+0353  05 FA     BRA wait
+0355  01        NOP ; branch delay slot

@@ -7,17 +7,17 @@ Writes next to this script:
   hang_test.lst.txt   listing (address, bytes, source)
 
 Each phase runs 10000 iterations of a RAM-write instruction followed by STOP
-(the STOP is the NOP syscall, R1 = 3, so the host services it and resumes):
-  A: STB (R3); STOP            -> 'A' ... 'a'
-  B: STW (R3); STOP            -> 'B' ... 'b'
-  C: STB (R3); NOP; STOP       -> 'C' ... 'c'
-  G: STB (R3); NOP x2; STOP    -> 'G' ... 'g'
-  H: STB (R3); NOP x3; STOP    -> 'H' ... 'h'
-  D: STB (R3); NOP x4; STOP    -> 'D' ... 'd'   (control: several instructions between)
+(the STOP is the NOP syscall, R3 = 0, so the host services it and resumes):
+  A: STB (R5); STOP            -> 'A' ... 'a'
+  B: STW (R5); STOP            -> 'B' ... 'b'
+  C: STB (R5); NOP; STOP       -> 'C' ... 'c'
+  G: STB (R5); NOP x2; STOP    -> 'G' ... 'g'
+  H: STB (R5); NOP x3; STOP    -> 'H' ... 'h'
+  D: STB (R5); NOP x4; STOP    -> 'D' ... 'd'   (control: several instructions between)
 A phase that completes prints its lowercase letter. Then it prints END and
 then parks in a read-syscall loop (reload or reset to run again).
-If the GSU hangs, the host prints "TIMEOUT: GSU still running" and no
-lowercase letter for that phase.
+If the GSU hangs, the output stops and there is no
+lowercase letter for that phase (a -DGSU_WATCHDOG_MS=500 build also prints TIMEOUT lines).
 """
 import os, sys, subprocess
 
@@ -47,15 +47,15 @@ def stop(): emit([0x00, 0x01], "STOP ; NOP (dummy byte after STOP)")
 def nop(t="NOP"): emit([0x01], t)
 def putc(ch, name):
     ibt(0, ord(ch) if isinstance(ch, str) else ch)
-    ibt(1, 1)
+    ibt(3, 4)                         # op = write syscall
     stop()
 
 def phase(tag, upper, body_bytes, body_text, nops):
     label("ph_" + tag)
     putc(upper, tag)
-    ibt(1, 3)                         # op = NOP syscall
+    ibt(3, 0)                         # op = NOP syscall
     iwt(2, N)                         # iteration count
-    iwt(3, SCRATCH)                   # RAM address
+    iwt(5, SCRATCH)                   # RAM address
     ibt(0, 0x55)                      # data
     label("lp_" + tag)
     emit(body_bytes, body_text)       # the RAM write
@@ -68,18 +68,18 @@ def phase(tag, upper, body_bytes, body_text, nops):
 
 label("start")
 for tag, up, body, text, nops in [
-    ("A", "A", [0x3D, 0x33], "ALT1 ; STB (R3)", 0),
-    ("B", "B", [0x33],       "STW (R3)",        0),
-    ("C", "C", [0x3D, 0x33], "ALT1 ; STB (R3)", 1),
-    ("G", "G", [0x3D, 0x33], "ALT1 ; STB (R3)", 2),
-    ("H", "H", [0x3D, 0x33], "ALT1 ; STB (R3)", 3),
-    ("D", "D", [0x3D, 0x33], "ALT1 ; STB (R3)", 4),
+    ("A", "A", [0x3D, 0x35], "ALT1 ; STB (R5)", 0),
+    ("B", "B", [0x35],       "STW (R5)",        0),
+    ("C", "C", [0x3D, 0x35], "ALT1 ; STB (R5)", 1),
+    ("G", "G", [0x3D, 0x35], "ALT1 ; STB (R5)", 2),
+    ("H", "H", [0x3D, 0x35], "ALT1 ; STB (R5)", 3),
+    ("D", "D", [0x3D, 0x35], "ALT1 ; STB (R5)", 4),
 ]:
     if tag in SEL: phase(tag, up, body, text, nops)
 for ch in "END\r\n":
     putc(ch, "")
 label("wait")
-ibt(1, 0)                             # read syscall: wait for a key (keeps the GSU parked)
+ibt(3, 3)                             # read syscall: wait for a key (keeps the GSU parked)
 stop()
 branch(0x05, "wait", "BRA wait")
 nop("NOP ; branch delay slot")

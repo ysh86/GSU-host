@@ -1,25 +1,32 @@
-# gsu-host
+# gsu-host v1.2.2
 
 Pico (RP2040) firmware that drives a real Super FX cartridge as a
 stand-alone processor.
 
 Status: confirmed on a real GSU-1 cart (board 1CA6B-01) and on a MARIO chip
-(MC1) cart (board 1C0N). The MC1 differs; see the MC1 section.
+(MC1) cart (board 1C0N); the diagnostic build also passes everything on a
+GSU-2 cart. The MC1 differs; see the MC1 section.
 
 - Diagnostic build (`-DGSU_DIAG=1`): bus reads and writes, SFR flag bits,
   R0-R13 and the latched-write rule, cache write/readback, start (GO via the
   R15 high byte), STOP with R15 = STOP + 2, and resume by rewriting R15, at
   CFGR/CLSR = 80/01 (21 MHz) and 00/00. All checks pass.
-- Echo demo (`-DGSU_PROGRAM_DEMO=1`): each typed character returns +1, so the
-  status, read and write syscalls work end to end over USB serial.
+- Echo demo: each typed character returns +1, so the status, read and write
+  syscalls work end to end over USB serial (earlier as a cache-resident build,
+  now `tools/echo_demo.load`, sent through the loader).
 - Measurement build (`-DGSU_MEASURE=1`): see "Measuring throughput" for the
   numbers (about 12.4 us and 80,900 syscalls/s).
 - RAM loader: the user loaded a binary build of the echo program through it
   and it ran (`Hello,world` came back as `Ifmmp-xpsme`). This confirms the
   loader's hand-assembled code, STB to cart RAM, LJMP to bank $70 and the
-  loaded program's syscalls. On the MC1 this works through the two-stage boot
-  (`-DGSU_MC1=1`); the cache-resident echo demo (32 bytes) does not work on
-  the MC1.
+  loaded program's syscalls. On the MC1 this worked through a two-stage boot
+  (stage 1 in the cache, loader from cart RAM); the cache-resident echo demo
+  (32 bytes) does not work on the MC1. Every chip now uses that two-stage
+  boot (see "RAM loader"); it now also runs on the GSU-1 (VCR=04).
+- Debug monitor: the start-up monitor with `l`, `i`, `c` and `m` works on the
+  GSU-1 (VCR=04) and the MC1. The exit syscall, `r`, `g` and `d` (RAM window
+  read through A10-A14 on GP21-GP25) have not been run yet (see "Verification
+  status").
 - The programs were also checked on a small simulator, which checks logic and
   branch offsets, not hardware.
 
@@ -34,14 +41,13 @@ Japanese): `docs/cache-and-chip-notes.ja.md`.
     export PICO_SDK_PATH=/path/to/pico-sdk
     mkdir build && cd build && cmake .. && make
     # copy gsu_host.uf2 to the Pico in BOOTSEL mode
-    # 10.7 MHz GSU clock (for the MC1): cmake -DCMAKE_C_FLAGS=-DGSU_CLOCK_21MHZ=0 ..
-    # MARIO chip (two-stage boot + 10.7 MHz, see the MC1 section): cmake -DCMAKE_C_FLAGS=-DGSU_MC1=1 ..
-    # demo program instead of the loader: cmake -DCMAKE_C_FLAGS=-DGSU_PROGRAM_DEMO=1 ..
+    # hang watchdog (prints TIMEOUT every 500 ms while the GSU runs; off by default): -DGSU_WATCHDOG_MS=500
+    # clock and multiplier speed are set at run time in the monitor: c 0|1, m 0|1 (see "Monitor")
 
 ## MARIO chip (MC1, VCR=01)
 
-Tested on a Japanese Star Fox cart (MC1) with SYSTEM CLK and /ROMSEL supplied
-externally. Results of the diagnostic build on this cart:
+Tested on a Japanese Star Fox cart (MC1, board 1C0N) with SYSTEM CLK supplied by
+an external oscillator and /ROMSEL tied high. Results of the diagnostic build on this cart:
 
 - Bus, registers, latched writes, cache readback, start/STOP/resume from line 0
   all pass, at CLSR=00 and CLSR=01.
@@ -63,21 +69,16 @@ externally. Results of the diagnostic build on this cart:
   host's bytes.
 
 **Use 10.7 MHz on the MC1.** At 21 MHz the echo loader build ran away (no
-STOP ever reached, `TIMEOUT: GSU still running, SFR=0020`), although the short
+STOP ever reached; a `-DGSU_WATCHDOG_MS=500` build printed `TIMEOUT: GSU still running, SFR=0020`), although the short
 diagnostic tests and the clock check pass at 21 MHz. The cause is not known; the
 MC1's rated clock is 10.7 MHz.
 
-Build for the MC1 with `-DGSU_MC1=1`, which selects the two-stage boot and the
-10.7 MHz clock. The boot part alone is `-DGSU_BOOT_STAGE1=1` (loader build only): the cache holds a
-15-byte stage-1 program (`boot_prog`, fits line 0). The firmware presets R2, R3,
-R4, R8 and serves the first `sizeof loader_prog` read syscalls from the
-firmware's own copy of the normal loader; stage 1 stores them in cart RAM with
-STB and LJMPs to $70:0000, so the normal loader then runs from RAM, which is
-the usual GSU way (the cache fills from RAM on misses). The PC protocol is
-unchanged. Confirmed on the MC1: with this build, loading the echo binary
-works (`Hello,world` came back as `Ifmmp-xpsme`), so the loader, LJMP to
-cart RAM, and execution from RAM with the normal cache fill all work on the
-MC1 at 10.7 MHz.
+Use the default 10.7 MHz clock on the MC1 (monitor `c 0`; the firmware detects the MC1 from VCR=01 for the monitor's `d`). The
+loader itself is the same on every chip: because the MC1 only runs host-written
+code from one cache block, the loader runs from cart RAM (see "RAM loader").
+Confirmed on the MC1 at 10.7 MHz: loading the echo binary works (`Hello,world`
+came back as `Ifmmp-xpsme`), so the loader, LJMP to cart RAM, and execution
+from RAM with the normal cache fill all work there.
 
 ## Wiring (5 V cart <-> 3.3 V Pico: level shifters required)
 
@@ -85,23 +86,39 @@ Pin numbers are the 62-pin SNES cartridge connector, from the SNESdev wiki
 (link in Sources). Directions there are read from a diagram, so treat them as
 approximate. Every connector pin is accounted for below.
 
-**Findings from the user's inspection of the cart PCB** (board marking
-1CA6B-01 with a GSU-1, as reported by the user; other boards may differ). These override
-the wiki-based guesses in the tables below:
+**Boards and chips** (from the user's inspection of three carts)
 
-- The two 8-pin groups at the cart's two ends (the "expansion terminals",
-  8 pins x 2) are all unused and unconnected (confirmed by the user). They
-  are pins 1, 2, 3, 4, 32, 33, 34, 35 and pins 28, 29, 30, 31, 59, 60, 61, 62:
-  SYSTEM CLK, EXPAND, PA0-PA7, /PRD, /PWR, /WRAMSEL, REFRESH and the
-  left/right audio pins. Leave all 16 open.
-- The clock oscillator is on the cart.
+| Cart | PCB | Chip | External clock | A23 (pin 48) | /ROMSEL (pin 49) |
+|------|-----|------|----------------|--------------|------------------|
+| Star Fox (JP) | 1C0N | MARIO chip 1 (MC1, VCR=01) | needed (on SYSTEM CLK, pin 1) | not connected | connected |
+| Wild Trax (JP) | 1CA6B-01 | GSU-1A (VCR=04) | not needed | not connected | not connected |
+| Yoshi's Island (JP) | 1CB5B-01 | GSU-2 (VCR=04) | not needed | connected | not connected |
+
+(The GSU-1A is called GSU-1 elsewhere in this README.) One wiring serves all
+three: **A23 low (GND), /ROMSEL high**, the rest as in the pin map. On a board
+that does not connect one of those pins, tying it is harmless. The GSU-2 cart
+also worked with A23 left open, but a connected input should not float, so tie
+it to GND. On 1C0N the clock
+comes from an external 21.477 MHz oscillator module (see below); the other two
+have the oscillator on the cart.
+
+On all three boards the 16 pins of the two 8-pin groups at the cart's two ends
+(the "expansion terminals") are unused and unconnected, except SYSTEM CLK
+(pin 1) on 1C0N. They are pins 1, 2, 3, 4, 32, 33, 34, 35 and pins 28, 29, 30,
+31, 59, 60, 61, 62: SYSTEM CLK, EXPAND, PA0-PA7, /PRD, /PWR, /WRAMSEL, REFRESH
+and the left/right audio pins. Leave all 16 open (on 1C0N, pin 1 takes the
+external clock).
+
+Also on all three boards:
+
 - PHI2 (CPU clock, pin 57) is not connected.
-- A23 (pin 48) and /CART (/ROMSEL, pin 49) are not connected.
-- The CIC is not connected to the Super FX, so it plays no part here.
+- Every cart has a CIC (the lock-out chip, connector pins 24, 25, 55, 56), but it
+  is not connected to the Super FX, and the carts run with those pins open, so
+  it plays no part here.
 
-Consequently the GSU clock comes from the oscillator on the cart, not from
-the connector. None of these pins needs driving, and the cart runs from power
-plus the signals in the first two tables.
+Consequently the GSU clock comes from the oscillator on the cart (or from the
+external module on 1C0N), not from the Pico. The cart runs from power plus the
+signals in the first two tables.
 
 **Pin map**
 
@@ -121,9 +138,9 @@ the tables below.
  3 PA6        in  open* | 34 PA7        in  open*
  4 /PRD       in  open* | 35 /PWR       in  open*
  5 GND        --  GND   | 36 GND        --  GND
- 6 A11        in  L     | 37 A12        in  H
- 7 A10        in  L     | 38 A13        in  H
- 8 A9         in  GP9   | 39 A14        in  L
+ 6 A11        in  GP22  | 37 A12        in  GP23
+ 7 A10        in  GP21  | 38 A13        in  GP24
+ 8 A9         in  GP9   | 39 A14        in  GP25
  9 A8         in  GP8   | 40 A15        in  L
 10 A7         in  GP7   | 41 A16        in  L
 11 A6         in  GP6   | 42 A17        in  L
@@ -132,8 +149,8 @@ the tables below.
 14 A3         in  GP3   | 45 A20        in  L
 15 A2         in  GP2   | 46 A21        in  L
 16 A1         in  GP1   | 47 A22        in  L
-17 A0         in  GP0   | 48 A23        in  open
-18 /IRQ       out open  | 49 /ROMSEL    in  open
+17 A0         in  GP0   | 48 A23        in  L   
+18 /IRQ       out open  | 49 /ROMSEL    in  H
 19 D0         bi  GP10  | 50 D4         bi  GP14
 20 D1         bi  GP11  | 51 D5         bi  GP15
 21 D2         bi  GP12  | 52 D6         bi  GP16
@@ -153,16 +170,14 @@ the tables below.
 |------|---------|
 | GPn  | driven by Pico GPIO n, through a level shifter |
 | H, L | hard-wired high / low |
-| open | leave open (not needed or not connected on the inspected cart) |
-| open* | one of the 16 expansion-terminal pins: confirmed unused and unconnected, leave open |
+| open | leave open (not needed, or not connected on the inspected carts) |
+| open* | one of the 16 expansion-terminal pins: unused and unconnected (SYSTEM CLK on 1C0N excepted), leave open |
 | +5V, GND | power |
 
-Note for other boards: on the MARIO chip (MC1) board 1C0N, SYSTEM CLK (pin 1)
-and /ROMSEL (pin 49) are connected to the chip, unlike on 1CA6B-01. That board
-needs an external clock on SYSTEM CLK (a 21.477 MHz oscillator module on the
-cart's 5 V supply) and /ROMSEL tied high (to +5 V). Both are done outside the
-Pico, so the firmware does not change and `ENABLE_GSU_CLK_OUT` stays 0. (Confirmed
-on a Japanese Star Fox cart.)
+SYSTEM CLK on 1C0N: the MARIO chip needs a 21.477 MHz oscillator module on the
+cart's 5 V supply, with its output on pin 1. This is done outside the Pico; the
+firmware has no clock output (GP21/23/24/25, the RP2040's clock output pins,
+carry A10-A14). Confirmed on a Japanese Star Fox cart.
 
 **Driven by the Pico (through level shifters)**
 
@@ -173,14 +188,23 @@ on a Japanese Star Fox cart.)
 | GP18    | /RD         | 23 |
 | GP19    | /WR         | 54 |
 | GP20    | /RESET      | 26 (bidirectional on the console; the firmware only drives it) |
+| GP21-25 | A10-A14     | 7, 6, 37, 38, 39 |
 
-**Hard-wired levels** (so the cart decodes $3000-$32FF in bank $00)
+A10-A14 are driven so the same wires select the GSU registers (A12=A13=1,
+the rest 0: $3000-$33FF) or the cart RAM window (A13=A14=1, A10-A12 = 1 KB
+block: $6000-$7FFF). They sit at the register levels except while the monitor
+reads RAM. If you wired them to fixed levels before (A12, A13 high, A10, A11,
+A14 low), move those five wires to GP21-GP25.
+
+**Hard-wired levels** (so the cart decodes bank $00)
 
 | Level | Signals (connector pins) |
 |-------|--------------------------|
-| High  | A12 (37), A13 (38) |
-| Low   | A10 (7), A11 (6), A14 (39), A15 (40), A16-A22 (41-47) |
-| Leave open | A23 (48), /ROMSEL, also called /CART (49): not connected on the inspected PCB |
+| Low   | A15 (40), A16-A22 (41-47), A23 (48) |
+| High  | /ROMSEL, also called /CART (49) |
+
+A23 matters only on 1CB5B-01 and /ROMSEL only on 1C0N; elsewhere the pins are
+not connected on the PCB and the level is ignored.
 
 **Power**
 
@@ -193,32 +217,45 @@ on a Japanese Star Fox cart.)
 
 | Signal | Pin | Notes |
 |--------|-----|-------|
-| Expansion group A: SYSTEM CLK, EXPAND, PA6, /PRD, /WRAMSEL, REFRESH, PA7, /PWR | 1, 2, 3, 4, 32, 33, 34, 35 | unused and unconnected (confirmed): leave open. The oscillator is on the cart, so no external clock is needed; GP21 / `ENABLE_GSU_CLK_OUT` stays off (kept only for carts that take the clock from the connector) |
-| Expansion group B: PA0, PA2, PA4, left audio, PA1, PA3, PA5, right audio | 28, 29, 30, 31, 59, 60, 61, 62 | unused and unconnected (confirmed): leave open |
-| PHI2 | 57 | CPU clock, not connected on the inspected PCB: leave open |
+| Expansion group A: SYSTEM CLK, EXPAND, PA6, /PRD, /WRAMSEL, REFRESH, PA7, /PWR | 1, 2, 3, 4, 32, 33, 34, 35 | unused and unconnected on all three boards, except SYSTEM CLK on 1C0N: leave open. The oscillator is on the cart, so no external clock is needed (on 1C0N, pin 1 takes the external clock module) |
+| Expansion group B: PA0, PA2, PA4, left audio, PA1, PA3, PA5, right audio | 28, 29, 30, 31, 59, 60, 61, 62 | unused and unconnected on all three boards: leave open |
+| PHI2 | 57 | CPU clock, not connected on any of the three boards: leave open |
 | /IRQ | 18 | cart output; the host polls SFR.GO and masks IRQ in CFGR, so leave open (pull-up if you use it later) |
-| CIC data 1, CIC reset, CIC data 2, CIC CLK | 24, 25, 55, 56 | the CIC is not connected to the Super FX (PCB inspection), so it is not needed; leave open |
+| CIC data 1, CIC reset, CIC data 2, CIC CLK | 24, 25, 55, 56 | the CIC is on every cart but not connected to the Super FX, so it is not needed; leave open |
 
-Cart ROM/RAM buses are never touched by the host. The host polls SFR.GO
+Cart ROM is never read by the host. Cart RAM is read only by the monitor
+(through the window above, with the GSU stopped). The host polls SFR.GO
 instead of using /IRQ.
 
 ## Startup text, then binary
 
 After reset the firmware prints a line such as
 
-    GSU host: VCR=01 SFR=0000 CLK=10.7MHz MODE=boot+loader
+    GSU host v1.2.2: VCR=01 SFR=0000 CLK=10.7MHz MODE=loader
 
 with the version register, the status flags, the clock the host selects
 (`CLK` is the value the firmware writes to CLSR; CLSR cannot be read back) and
-the build mode (`loader`, `boot+loader`, `demo`, `measure` or `diag`), then
-`READY\r\n`.
+the build mode (`loader`, `measure` or `diag`).
+
+In the default (`loader`) build the firmware then enters the monitor
+(`mon> `) and does not start the GSU. Type `l` (or send `l\r`) to load the
+loader; it prints `READY\r\n`. `i` prints the banner line again, so a PC app
+that connects after the reset can still read the clock. The measure build has
+no monitor at start: it starts the GSU and prints `READY\r\n` right away.
+
 Everything after `READY\r\n` is the raw byte stream of the GSU program's
 read/write syscalls. A PC app should read lines until `READY`.
 
 ## RAM loader (default)
 
-The firmware puts a 65-byte loader (padded to 80) in the GSU instruction cache and starts
-it. Send, little endian, after `READY`:
+The loader starts in two stages, the same on every chip. The firmware puts a
+15-byte stage-1 program (`boot_prog`, one cache line) in the GSU instruction
+cache, presets R1, R2, R4, R8, and starts it. Stage 1 reads the first
+`sizeof loader_prog` (80) read syscalls, which the firmware serves from its own
+copy of the loader, stores them in cart RAM at $0000-$004F with STB and
+LJMPs to $70:0000. The 65-byte loader then runs from RAM (the cache fills from
+RAM on misses). It is no longer run from the cache on the GSU-1; one path is
+used everywhere. Send, little endian, after `READY`:
 
 | Bytes   | Meaning |
 |---------|---------|
@@ -231,18 +268,25 @@ The loader reads each byte with the read syscall, stores it with STB, then
 runs LJMP to bank $70 at the entry address. The loaded program keeps using
 the same syscalls through STOP. Notes:
 
-- **Convention: load and enter at $0200.** Keep $0000-$01FF free as scratch
-  RAM for variables: `LMS Rn,(yy)` and `SMS (yy),Rn` reach exactly that
-  range with 2-byte instructions (address = yy x 2). Its contents at start
-  are undefined (the previous run's data, or the loader's leftovers at
-  $0000-$004F on the MC1), so write a variable before reading it. $0200 is
-  also above the MC1 loader, so one binary runs on both chips.
+- **Convention: load and enter at $0200.** Use $0050-$01FF as scratch RAM
+  for variables: `LMS Rn,(yy)` and `SMS (yy),Rn` reach $0000-$01FE with 2-byte
+  instructions (address = yy x 2), so yy = $28 and up. Its contents at start
+  are undefined (the previous run's data), so write a variable before reading
+  it. **Never write $0000-$004F:** that is where the loader stays, and on the
+  MC1 `l` after a program has run restarts the loader from there (see below).
+  $0200 is also above the loader, so one binary runs on every chip.
 - Assemble the payload for the address you load it at. Load and entry
   addresses are independent, so data can sit below the code.
-- With `-DGSU_BOOT_STAGE1=1` (MC1) the loader itself sits in cart RAM at
-  $0000-$004F while it runs, so load the program at $0050 or above (by
-  the convention above, $0200). Loading over $0000-$004F overwrites the running loader. With
-  the default build the loader runs from the cache, so any address works.
+- On the MC1, `l` after a program has run (from the monitor after an exit) does
+  not run stage 1 again: the MC1 keeps the cache window and cache lines of the
+  program that ran and ignores host writes to them (an experiment showed stage 1
+  could not be started: the fetch at $0000 returned 00 = STOP). The firmware starts the
+  loader that is still in RAM at $0000 directly, with PBR=$70. This only works
+  if the program left $0000-$004F alone; otherwise reset the board. The GSU-1 and
+  GSU-2 run stage 1 again every time.
+- The loader itself sits in cart RAM at $0000-$004F while it runs, so load
+  the program at $0050 or above (by the convention above, $0200). Loading
+  over $0000-$004F overwrites the running loader.
 - Length is limited by the cart's RAM size (commonly 32 KB or 64 KB), and
   the loader does not check it.
 - Speed is set by the syscall round trip. A read syscall costs 5 bus reads and
@@ -254,15 +298,17 @@ the same syscalls through STOP. Notes:
 
 ## System calls
 
-The GSU program sets R1 (low byte) to the op and executes STOP. The host
-sees GO cleared, services the call, and resumes by rewriting R15.
+The GSU program sets R3 (low byte) to the op and executes STOP. The host
+sees GO cleared, services the call, and resumes by rewriting R15. The numbers
+follow Unix (exit 1, read 3, write 4) where there is a counterpart.
 
-| R1 | Name   | R0 low byte                                              |
+| R3 | Name   | R0 low byte                                              |
 |----|--------|----------------------------------------------------------|
-| 0  | read   | out: next byte from USB serial (blocks until available)  |
-| 1  | write  | in: byte sent to USB serial                              |
+| 0  | nop    | unchanged (host does nothing; used by the measurement build) |
+| 1  | exit   | control returns to the Pico: it prints `EXIT R15=xxxx` and enters the monitor |
 | 2  | status | out: bit0 = RDRF (RX byte available), bit1 = TDRE (TX can accept a byte) |
-| 3  | nop    | unchanged (host does nothing; used by the measurement build) |
+| 3  | read   | out: next byte from USB serial (blocks until available)  |
+| 4  | write  | in: byte sent to USB serial                              |
 
 The status bits follow the low two bits of a 6850 ACIA status register.
 Bits 7..2 are returned as 0. TDRE is "USB connected and the CDC write FIFO
@@ -273,6 +319,52 @@ The read and status results are written to R0 as a zero-extended 16-bit value
 Resume rewrites R15 with the value it already holds (low byte, then high
 byte; the high-byte write sets GO). This works for code at any address.
 
+## Monitor (exit syscall) and RAM window
+
+The monitor is also the first thing the default build shows after reset (`d`, `r`
+and `i` work, `g` does not until a program has run; `l` starts the loader).
+
+A GSU program that runs `IBT R3,#1; STOP` (syscall 1, exit) stops and hands
+control to the Pico. The firmware prints `\r\nEXIT R15=xxxx\r\n` (R15 as left by
+STOP, i.e. the STOP address + 2), then a `mon> ` prompt. From here the stream
+is text again: a PC app has to treat the `EXIT` line as the end of the binary
+stream (it cannot be told apart from program data, so for programs that use
+exit, send a marker of your own just before it if you need to be sure).
+Numbers are hex. `d` prints 16 bytes per row, rows aligned to 16, and leaves
+blank the bytes outside the requested range. RAM is 0000-1FFF; an `eaddr` past
+the end is cut off there.
+
+| Command | Action |
+|---------|--------|
+| `d` | dump 256 bytes of cart RAM after the last dump (the first time from 0000) |
+| `d saddr` | dump 256 bytes from `saddr` |
+| `d saddr,eaddr` | dump `saddr` <= a <= `eaddr` (inclusive) |
+| `r` | R0-R15, SFR, PBR, CBR (PBR and CBR read as `n/a` on the MC1, where they are not readable) |
+| `g` | resume the GSU after the exit, as if it were any other syscall (not possible before the first `l`) |
+| `l` | load: boot the loader (prints `READY`, then send a program); also reloads after an exit |
+| `c 0` / `c 1` | GSU clock 10.7 MHz (default) / 21.4 MHz; applied at the next `l`, or at `g` after an exit if it changed (CFGR/CLSR are written only when the value changed); refused while `m 1` is set |
+| `m 0` / `m 1` | multiplier standard (default) / high speed (CFGR.MS0); applied at the next `l` or `g` (same rule); refused while the clock is 21.4 MHz |
+| `i` | print the banner line again (VCR, SFR, current CLK, MODE, MS0) |
+
+The settings are not saved: after a reset the defaults (10.7 MHz, standard
+multiplier) are back, so type `c` and `m` again before `l` if you want something
+else. A warning is printed for `c 1` on the MC1, which runs away at 21.4 MHz in
+longer programs.
+| `?` | help |
+
+This works on the GSU-1 and GSU-2; on the MC1 the window shows no RAM, so `d`
+is disabled when the firmware sees VCR=01 (`r`, `g` and `l` work everywhere).
+
+Cart RAM is read through the cart's S-CPU window at $6000-$7FFF in bank $00
+(A13=A14=1, A15=0), which shows the first 8 KB of the RAM the GSU sees at
+$70:0000. The Pico drives A10-A14 on GP21-GP25 for this, and sets SCMR.RAN=0
+(RAM to the S-CPU) only while it reads, so the GSU must be stopped. Only the
+first 8 KB are reachable (A15 and above are fixed). Quick check after loading
+a program: call exit, then `d 0,4F` should show the loader's bytes
+(`A3 03 00 01 11 B0 9E A3 ...`) at the start of RAM. `tools/exit_test.load` is
+a ready-made program for this (7 bytes at $0200: `IBT R3,#1; STOP; BRA` back,
+so every `g` returns to the monitor): type `l`, wait for `READY`, send it, then use `d`.
+
 ## Host register rules (from fullsnes, GSU-n chapter)
 
 - **R0-R15 writes are latched.** A write to the even address (LSB) only sets
@@ -281,7 +373,8 @@ byte; the high-byte write sets GO). This works for code at any address.
   The firmware does this in `gsu_reg16_write()`.
 - **A write to R15's MSB (301Fh) sets GO** and starts the GSU.
 - **While GO=1, only SFR, SCMR and VCR may be accessed.** SFR can be read and
-  written while running. The firmware only polls SFR while the GSU runs.
+  written while running. The firmware only polls SFR while the GSU runs (and
+  the monitor only reads RAM while it is stopped).
 - **Loading the cache:** write SFR=0000h (GO=0) first; that forces CBR=0 and
   marks every line empty. Then write the code in 16-byte lines; writing a
   line's last byte marks it valid. CBR is read-only for the host.
@@ -301,13 +394,16 @@ byte; the high-byte write sets GO). This works for code at any address.
   test"; two NOPs are enough). The loader keeps several instructions between STB and the next STOP.
   GSU-1 (tested) and GSU-2 are not affected.
 
-## Demo program
+## Echo demo (`tools/echo_demo.load`)
 
-With `-DGSU_PROGRAM_DEMO=1`, the GSU program waits until RDRF is set
-(status syscall), reads a byte, adds 1, and writes it back, so each
-character you type returns as character + 1. Confirmed on the cart: typing
-`123` returns `234`. Each byte costs three syscalls (status, read, write),
-about 37 us, so the echo loop tops out near 27 KB/s.
+A 21-byte program for the loader (load and entry `$0200`): it waits until
+RDRF is set (status syscall), reads a byte, adds 1, and writes it back, so
+each character you type returns as character + 1. Type `l`, wait for `READY`,
+then send the file. (Confirmed earlier as a cache-resident build: typing `123`
+returns `234`.) Each byte costs three syscalls (status, read, write), about
+37 us, so the echo loop tops out near 27 KB/s. Bytes, `$0200`:
+`A3 02 00 01 3E 71 09 F8 01 A3 03 00 01 D0 A3 04 00 01 05 EC 01`. It is
+checked in `tools/gsusim.py`.
 
 ## Diagnostics (`-DGSU_DIAG=1`)
 
@@ -330,26 +426,30 @@ waits for a key to run again:
    the line 0/1 boundary, and with a STOP at the start of a line followed by a
    resume mid-line. Added after the MC1 echo demo found line 1 overwritten with
    ROM code.
+7. Last-block test (the MC1 behaviour, see its section).
+8. Cart RAM window ($6000-$7FFF, A10-A14). 8.1 (informational) reads four
+   addresses in each 1 KB block with the data lines pre-driven to 00 and to FF;
+   a `*` means the value follows the pre-driven level (floating bus). A stable
+   00/00 does not prove the cart answers; a pulled-low bus looks the same.
+   8.2 a GSU program stores a byte into RAM and the window must show it.
+   8.3 writes a different byte into each block through the window and reads it
+   back (aliased blocks point at a stuck or swapped A10-A12 wire). 8.4 the host
+   writes a byte through the window and the GSU loads it (LDB) into R0: shows
+   whether window writes reach RAM even if window reads do not. 8.5 reads the
+   byte 8.2 stored with SCMR = 00, 08, 10 and 18, in case the S-CPU needs another
+   ownership setting. Finally checks that the registers still work. All pass on
+   the GSU-1 and GSU-2 (8.1-8.3 of the first version); the MC1 (board 1C0N)
+   fails 8.2-8.4 and 8.5 shows only 00 (see "Verification status").
 
 Reading the result: step 2 failing points at the bus (level shifter direction,
 data lines, /WR timing); step 2 passing but step 4 failing points at GO not
-starting, the cart clock or the fixed address levels; step 4 passing only with
+starting, the cart clock or the A10-A14 levels; step 4 passing only with
 CFGR/CLSR = 0 points at the clock configuration.
-
-## Trace (`-DGSU_TRACE=1`)
-
-Use with `-DGSU_PROGRAM_DEMO=1`. At each STOP the host prints
-`[op=.. R0=.. R15=.. CBR=.... SFR=....]` (R15 is STOP address + 2), and
-dumps the first 64 cache bytes once, after the 4th line, for the first 40 lines
-(`-DTRACE_LINES=n`); repeated status polls are collapsed. Expected sequence for the
-echo demo after typing `H`: `[op=02 R0=.. R15=0004]`, `[op=00 R0=0001 R15=000D]`,
-`[op=01 R0=0049 R15=0012]`, then `[op=02 ... R15=0004]` again. The echo
-demo run on the MC1 went wrong at the second pass.
 
 ## Measuring throughput (`-DGSU_MEASURE=1`)
 
 Build with the macro, for example `cmake -DCMAKE_C_FLAGS=-DGSU_MEASURE=1 ..`.
-It takes precedence over the loader and the demo. Open the USB serial port;
+It takes precedence over the loader. Open the USB serial port;
 the firmware prints two lines and then halts:
 
     MEASURE bus: read=... ns, write=... ns (sys clock ... Hz, BUS_DELAY_CYCLES=...)
@@ -372,7 +472,7 @@ the firmware prints two lines and then halts:
       MEASURE syscalls: n=1000000 total=12368118 us avg=12368 ns rate=80853 /s polls_x100=100
 
   A syscall is 7 bus accesses: 3 reads to see the stop and get the op (SFR low
-  poll, SFR high, R1), then 2 reads and 2 writes to resume (R15 get and set).
+  poll, SFR high, R3), then 2 reads and 2 writes to resume (R15 get and set).
   That is 5 x 1686 + 2 x 1712 = 11.85 us; the other ~0.5 us is loop overhead.
   The GSU's own execution time is negligible, so the rate is set by the host's
   bus speed. `polls_x100=100` means one SFR poll per syscall: the GSU had
@@ -395,23 +495,23 @@ them after a hang, because the all-in-one file stops at the first hang).
 `python3 tools/hangtest/make.py` regenerates everything, with `.bin` and a
 listing (`.lst.txt`) for each; `make.py BCD` builds a custom selection.
 
-Run: build and flash the usual firmware (default for GSU-1, `-DGSU_MC1=1` for
-the MC1), wait for `READY`, and send `hang_test.load` as is. Each phase prints
+Run: build and flash the usual firmware (type `c 0` on the MC1, the default), type `l`, wait for `READY`, and send `hang_test.load` as is. Each phase prints
 an uppercase letter, runs 10000 "RAM write, then STOP" iterations (the STOP is
 the nop syscall), and prints the lowercase letter:
 
 | phase | code before STOP |
 |-------|------------------|
-| A | `STB (R3)` directly followed by STOP |
-| B | `STW (R3)` directly followed by STOP |
-| C | `STB (R3)`, one NOP, STOP |
-| G | `STB (R3)`, two NOPs, STOP |
-| H | `STB (R3)`, three NOPs, STOP |
-| D | `STB (R3)`, four NOPs, STOP |
+| A | `STB (R5)` directly followed by STOP |
+| B | `STW (R5)` directly followed by STOP |
+| C | `STB (R5)`, one NOP, STOP |
+| G | `STB (R5)`, two NOPs, STOP |
+| H | `STB (R5)`, three NOPs, STOP |
+| D | `STB (R5)`, four NOPs, STOP |
 
 Expected output when nothing hangs: `AaBbCcGgHhDdEND`, then the GSU waits for a key.
-If a phase hangs, its lowercase letter is missing and the firmware reports
-`TIMEOUT: GSU still running, SFR=0020`; reset the Pico to recover. The first
+If a phase hangs, its lowercase letter is missing and the output stops (build
+with `-DGSU_WATCHDOG_MS=500` to also get `TIMEOUT: GSU still running, SFR=0020`
+lines); reset the Pico to recover. The first
 phase that does not finish shows which pattern is affected (A/B alone means
 "immediately after the write"; C too means one instruction is not enough).
 
@@ -423,24 +523,111 @@ So on the MC1 both STB and STW hang when STOP follows directly or after one
 NOP; two or more instructions in between are enough. The loader and stage 1
 keep five instructions between STB and STOP, so they are safe.
 
+## Multiplier speed (CFGR.MS0, `tools/multest/`)
+
+CFGR bit 5 (MS0) is a high-speed multiply mode that must stay 0 at 21 MHz.
+The monitor's `m 1` sets it (it is refused while the clock is 21.4 MHz, and `c 1`
+is refused while MS0 is set); `i` then shows ` MS0=1` in the banner. The
+diagnostic build always uses CFGR=80.
+
+Benchmark: `tools/multest/mul_bench.load` (load and entry `$0200`, 342 bytes;
+`python3 tools/multest/make.py [iterations [outdir]]` rebuilds it with a
+listing). It runs five phases of 65535 x 32 identical operations from the
+cache and writes a marker letter between them: `N` (32 NOPs, baseline), `M`
+MULT, `U` UMULT (ALT1 + MULT), `F` FMULT, `L` LMULT (ALT1 + FMULT), then `E`.
+`tools/multest/run.py PORT [10|21] [ms0]` (needs pyserial; run it right after a reset) sets the clock and MS0 with the monitor commands, sends `l`, waits for READY, sends the
+file, timestamps the letters and prints cycles per operation =
+(T_phase - T_N) / (65535 x 32) x clock + 1. The `U` and `L` rows include the
+prefix byte. The clock for the cycle counts is the one it selected (10 = 10.7 MHz,
+the default, or 21 = 21.4 MHz). The 21.4 MHz row below was measured with MS0
+forced to 0 in an earlier build.
+
+Results (cycles per operation as printed by `run.py`, one run each):
+
+| Chip | Clock | MS0 | MULT | UMULT (ALT1+) | FMULT | LMULT (ALT1+) |
+|------|-------|-----|------|---------------|-------|---------------|
+| MC1 (1C0N) | 10.7 MHz | 0 | 3.33 | 9.22 | 11.21 | 14.20 |
+| MC1 (1C0N) | 10.7 MHz | 1 | 3.33 | 9.22 | 11.21 | 14.20 |
+| GSU-1A (1CA6B-01, VCR=04) | 10.7 MHz | 0 | 3.35 | 9.27 | 11.28 | 14.29 |
+| GSU-1A (1CA6B-01, VCR=04) | 10.7 MHz | 1 | 3.25 | 6.25 | 7.24 | 10.24 |
+| GSU-1A (1CA6B-01, VCR=04) | 21.4 MHz | 0 (forced) | 5.54 | 11.53 | 12.53 | 17.55 |
+
+The same in time (cycles / clock):
+
+| Chip, clock, MS0 | MULT | UMULT | FMULT | LMULT |
+|------------------|------|-------|-------|-------|
+| MC1, 10.7 MHz, 0 or 1 | 311 ns | 862 ns | 1048 ns | 1327 ns |
+| GSU-1A, 10.7 MHz, 0 | 312 ns | 863 ns | 1050 ns | 1331 ns |
+| GSU-1A, 10.7 MHz, 1 | 304 ns | 584 ns | 677 ns | 957 ns |
+| GSU-1A, 21.4 MHz, 0 | 258 ns | 537 ns | 583 ns | 817 ns |
+
+Documented cycle counts for comparison (instruction pages on sneslab.net, cache
+speed; ROM/RAM speed adds 2-3 cycles; the page says only that the value depends
+on CFGR, not which value belongs to MS0=1; the smaller one is the natural reading
+and fits FMULT/LMULT below):
+
+| | MULT | UMULT (incl. ALT1) | FMULT | LMULT (incl. ALT1) |
+|---|------|-------|-------|-------|
+| Documented, cache | 1 or 2 | 2 or 3 | 4 or 8 | 5 or 9 |
+| Documented, ROM/RAM | 3 or 5 | 6 or 8 | 7 or 11 | 10 or 14 |
+| Measured MS0=0 -> 1 (change) | 3.35 -> 3.25 (-0.1) | 9.27 -> 6.25 (-3) | 11.28 -> 7.24 (-4) | 14.29 -> 10.24 (-4) |
+
+The FMULT and LMULT changes (-4) match the documented 8 -> 4 and 9 -> 5. UMULT
+changes by 3 where the documentation gives 1, and MULT hardly changes where it
+gives 1. The measured absolute values are 3-7 cycles above the documented cache
+speed even though the loop runs from the cache (NOP baseline 1.03 cycles), so the
+documented counts are a guide to the ratios only.
+
+The NOP baseline is 1.03 cycles per instruction, so the cache runs the loop at
+full speed. The multiply costs are above the 1-9 cycles the sources list (the
+prefix rows include one cycle for ALT1); treat them as measured values for this
+setup.
+
+Findings.
+
+1. **MS0=1 works on the GSU-1A at 10.7 MHz.** UMULT, FMULT and LMULT take 3, 4
+   and 4 cycles less (FMULT 1050 ns -> 677 ns, 36 % faster); MULT (8 x 8) does
+   not change. With MS0=0 the GSU-1A and the MC1 give the same numbers.
+2. **The MC1 ignores MS0** (identical results with 0 and 1). CFGR is
+   write-only, so the bit cannot be read back; `gsu_boot()` writes CFGR=A0 once
+   and nothing rewrites it.
+3. **The multiplier does not scale with the clock.** At 21.4 MHz the cycle count
+   goes up (FMULT about 7 -> 12.5), so multiplies are only 8-15 % faster in
+   time than at 10.7 MHz with MS0=1, and MS0 cannot be used at 21.4 MHz.
+   Multiply-heavy code gains almost nothing from 21.4 MHz.
+4. GSU-2: not measured. It is assumed to behave like the GSU-1A (same VCR=04
+   family), so `c 0` + `m 1` is the setting to try.
+
+Use: for multiply-heavy programs on the GSU-1/GSU-2, type `c 0` and `m 1` in the
+monitor before `l`; for everything else `c 1` (21.4 MHz) is faster. On the MC1
+stay at `c 0` (MS0 has no effect there).
+
 ## Verification status
 
 Confirmed on the cart:
 
-- Register window decode with the fixed A10-A22 levels, bus reads and writes,
+- Register window decode with A10-A22 at fixed levels (since changed: A10-A14
+  are now driven from GP21-GP25, see below), bus reads and writes,
   BUS_DELAY_CYCLES = 64, SFR flag bits, R0-R13, the latched-write rule.
 - Cache write/readback, GO set by the R15 high byte, running from the cache
   (CBR=0), STOP leaving R15 = STOP + 2, resume by rewriting R15, at 21 MHz and
   at 10.7 MHz.
 - Syscalls read, write and status (echo demo), USB serial round trip.
 - The RAM loader: payload received, stored with STB, LJMP to bank $70 and
-  execution from cart RAM, with the loaded program using the syscalls.
+  execution from cart RAM, with the loaded program using the syscalls, through
+  the two-stage boot on the GSU-1 (VCR=04) and the MC1 (10.7 MHz).
+- On the MC1, `l` after a program has run restarts the RAM loader directly
+  (PBR=$70, no stage 1): reload, run, `g` and `l` again work. Stage 1 cannot be
+  run again there (the MC1 keeps the cache window of the program that ran).
+- The monitor at start-up (`mon> `): `l` loads the loader (`READY`), `i` prints
+  the banner, `c 0|1` and `m 0|1` set the clock and MS0 with the refusals between
+  `c 1` and `m 1` (on the GSU-1 and the MC1).
 - Throughput of the syscall path (measurement build).
 - The Pico SDK build, including `tusb.h` for `USE_TUD_TX_STATUS`.
 - The GSU clock source is the oscillator on the cart; the chip is a GSU-1
   (VCR=04).
 
-- The hand-assembled echo demo (`demo_prog`, +1) was assembled with the bass
+- The hand-assembled echo demo (now `tools/echo_demo.load`, +1) was assembled with the bass
   assembler by the user: the generated bytes match, and it runs on both the
   GSU-1 and the MC1. (`loader_prog` and `boot_prog` were not compared with
   assembler output; they run correctly on the cart.)
@@ -451,7 +638,35 @@ Confirmed on the cart:
 Confirmed by the hang test: an STB or STW followed by STOP with at most one
 instruction (NOP) in between hangs the MC1 but not the GSU-1; two are enough.
 
-Nothing is left to verify.
+Still to verify (implemented in the firmware, not yet run on hardware; marked
+`[VERIFY]` in the code):
+
+1. A10-A14 on GP21-GP25: confirmed. The diagnostic build passes all checks on
+   the GSU-1 and the GSU-2, and [1]-[5] pass on the MC1, with the Pico driving
+   the five lines.
+2. The RAM window: confirmed on the GSU-1 and the GSU-2 (the first version of
+   diag [8], host write through the window and read back, passes on both), and
+   found not to work on the MC1 (board 1C0N, 10.7 MHz). Full diag [8] on the MC1:
+   reads give a constant 00 whatever the data lines were pre-driven to (a bus
+   pulled low, or the cart driving 00), or the stale 10 (the SCMR value written
+   just before); a byte the GSU stored (5A) is never seen, with SCMR = 00, 08, 10
+   or 18 (8.5); and bytes the host writes through the window never reach RAM
+   (8.4: the GSU's LDB at $0020 returned the same 1C after writes of 3C and C3).
+   The registers stay reachable. So with /ROMSEL held high the S-CPU window
+   $6000-$7FFF shows no RAM on the MC1, in either direction. Most likely the MC1
+   maps its RAM only at $70-$71 (where the S-CPU reaches it with /ROMSEL low); not
+   tested. The monitor's `d` is therefore disabled when the firmware sees VCR=01
+   (it prints a notice). Options if the MC1 needs it: drive A20, A21 and A22
+   together from one GPIO (bank $70) and /ROMSEL from another (two more pins,
+   GP26 and GP27), or read RAM with a GSU program into the registers (works on
+   every chip; not built).
+3. The exit syscall (R3=1) and the monitor commands `r`, `g` and `d` (on the
+   GSU-1 and GSU-2).
+4. Changing the clock or MS0 with `c` / `m` and `g` after an exit (CLSR/CFGR
+   written between a STOP and the resume).
+5. CFGR.MS0 on the GSU-2 (measured on the GSU-1A only; the GSU-2 is assumed to
+   behave the same, see "Multiplier speed").
+
 (Loader speed and `BUS_DELAY_CYCLES` tuning moved to "Optimization ideas".)
 
 Open questions, cause unknown (no action planned; notes and ideas for
