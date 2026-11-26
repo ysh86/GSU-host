@@ -1,4 +1,4 @@
-# gsu-host v1.3.0
+# GSU-host v1.3.0
 
 Pico (RP2040) firmware that drives a real Super FX cartridge as a
 stand-alone processor.
@@ -13,7 +13,7 @@ GSU-2 cart. The MC1 differs; see the MC1 section.
   CFGR/CLSR = 80/01 (21 MHz) and 00/00. All checks pass.
 - Echo demo: each typed character returns +1, so the fstat, read and write
   syscalls work end to end over USB serial (earlier as a cache-resident build,
-  now `tools/echo_demo.load`, sent through the loader).
+  now sent through the loader).
 - Measurement build (`-DGSU_MEASURE=1`): see "Measuring throughput" for the
   numbers (about 12.4 us and 80,900 syscalls/s).
 - RAM loader: the user loaded a binary build of the echo program through it
@@ -68,6 +68,18 @@ an external oscillator and /ROMSEL tied high. Results of the diagnostic build on
   ended in `BAD OP FF R15=0039` at both 21 and 10.7 MHz. The cause is not
   understood: resuming at $12 inside a host-written line 1 did execute the
   host's bytes.
+
+- **Do not write R14 in programs for the MC1.** A Mandelbrot-style program (146
+  bytes, loaded at `$0200`) that used R14 for an intermediate value ran
+  correctly on the GSU-1, but on the MC1 it went wrong after the first
+  syscall: it ran code of the program loaded before it (the echo program) and
+  ended in `EXIT` or `BAD OP` at addresses that belong to that program. Keeping the
+  intermediate value in RAM (STW / LDW) instead of R14 made it run correctly on
+  the MC1, at a small cost in speed. R14 is the ROM address pointer, which
+  the documentation says is used for ROM access (a write to R14 starts a ROM
+  read); the program touches no ROM, so the effect is unexplained. It may be
+  another face of the MC1's cache behaviour above. `[VERIFY]` Programs that
+  must run on both chips should leave R14 alone (R12/R13 and RAM are free).
 
 **Use 10.7 MHz on the MC1.** At 21 MHz the echo loader build ran away (no
 STOP ever reached; a `-DGSU_WATCHDOG_MS=500` build printed `TIMEOUT: GSU still running, SFR=0020`), although the short
@@ -311,7 +323,10 @@ counterpart.
 | 3  | read   | out: next byte from USB serial (blocks until available)  |
 | 4  | write  | in: byte sent to USB serial                              |
 | 28 | fstat  | out: bit0 = RDRF (RX byte available), bit1 = TDRE (TX can accept a byte) |
-| 43 | times  | reserved, not implemented (stops with `BAD OP 2B`)       |
+| 43 | times  | reserved, not implemented (`BAD OP 2B`)                   |
+
+An unknown number prints `BAD OP xx R15=xxxx` and enters the monitor (`r` shows
+the registers; `g` and `t` are refused, `l` loads a program).
 
 The status bits follow the low two bits of a 6850 ACIA status register.
 Bits 7..2 are returned as 0. TDRE is "USB connected and the CDC write FIFO
@@ -365,9 +380,9 @@ $70:0000. The Pico drives A10-A14 on GP21-GP25 for this, and sets SCMR.RAN=0
 (RAM to the S-CPU) only while it reads, so the GSU must be stopped. Only the
 first 8 KB are reachable (A15 and above are fixed). Quick check after loading
 a program: call exit, then `d 0,4F` should show the loader's bytes
-(`A3 03 00 01 11 B0 9E A3 ...`) at the start of RAM. `tools/exit_test.load` is
-a ready-made program for this (7 bytes at $0200: `IBT R3,#1; STOP; BRA` back,
-so every `g` returns to the monitor): type `l`, wait for `READY`, send it, then use `d`.
+(`A3 03 00 01 11 B0 9E A3 ...`) at the start of RAM. A minimal program for this
+is `IBT R3,#1; STOP; NOP; BRA` back (7 bytes at $0200, so every `g` returns to the
+monitor): type `l`, wait for `READY`, send `00 02 00 02 07 00 A3 01 00 01 05 FA 01`, then use `d`.
 
 ## Host register rules (from fullsnes, GSU-n chapter)
 
@@ -398,16 +413,15 @@ so every `g` returns to the monitor): type `l`, wait for `READY`, send it, then 
   test"; two NOPs are enough). The loader keeps several instructions between STB and the next STOP.
   GSU-1 (tested) and GSU-2 are not affected.
 
-## Echo demo (`tools/echo_demo.load`)
+## Echo demo
 
 A 21-byte program for the loader (load and entry `$0200`): it waits until
 RDRF is set (fstat syscall), reads a byte, adds 1, and writes it back, so
 each character you type returns as character + 1. Type `l`, wait for `READY`,
-then send the file. (Confirmed earlier as a cache-resident build: typing `123`
+then send the stream `00 02 00 02 15 00` + the bytes below. (Confirmed earlier as a cache-resident build: typing `123`
 returns `234`.) Each byte costs three syscalls (fstat, read, write), about
 37 us, so the echo loop tops out near 27 KB/s. Bytes, `$0200`:
-`A3 1C 00 01 3E 71 09 F8 01 A3 03 00 01 D0 A3 04 00 01 05 EC 01`. It is
-checked in `tools/gsusim.py`.
+`A3 1C 00 01 3E 71 09 F8 01 A3 03 00 01 D0 A3 04 00 01 05 EC 01`.
 
 ## Diagnostics (`-DGSU_DIAG=1`)
 
@@ -490,18 +504,12 @@ the firmware prints two lines and then halts:
   loop would pollute the timing.
 - Cross-check with a logic analyzer on /RD and /WR if you have one.
 
-## STB-then-STOP hang test (`tools/hangtest/`)
+## STB-then-STOP hang test
 
-`hang_test.load` is a ready-made loader stream (load address and entry
-`$0200`, 226 bytes; works on both chips, since `$0200` is above the stage-1
-area; the test writes to `$0400`). `hang_test_A.load` ... (`_B`, `_C`, `_G`, `_H`, `_D`) contain one phase each (use
-them after a hang, because the all-in-one file stops at the first hang).
-`python3 tools/hangtest/make.py` regenerates everything, with `.bin` and a
-listing (`.lst.txt`) for each; `make.py BCD` builds a custom selection.
-
-Run: build and flash the usual firmware (type `c 0` on the MC1, the default), type `l`, wait for `READY`, and send `hang_test.load` as is. Each phase prints
+The test program (load address and entry `$0200`, writes to `$0400`; works on
+both chips, since `$0200` is above the stage-1 area) runs six phases. Each prints
 an uppercase letter, runs 10000 "RAM write, then STOP" iterations (the STOP is
-the nop syscall), and prints the lowercase letter:
+the nop syscall), and prints the lowercase letter (type `c 0` on the MC1, the default):
 
 | phase | code before STOP |
 |-------|------------------|
@@ -513,8 +521,8 @@ the nop syscall), and prints the lowercase letter:
 | D | `STB (R5)`, four NOPs, STOP |
 
 Expected output when nothing hangs: `AaBbCcGgHhDdEND`, then the GSU waits for a key.
-If a phase hangs, its lowercase letter is missing and the output stops (build
-with `-DGSU_WATCHDOG_MS=500` to also get `TIMEOUT: GSU still running, SFR=0020`
+If a phase hangs, its lowercase letter is missing and the output stops (a build
+with `-DGSU_WATCHDOG_MS=500` also prints `TIMEOUT: GSU still running, SFR=0020`
 lines); reset the Pico to recover. The first
 phase that does not finish shows which pattern is affected (A/B alone means
 "immediately after the write"; C too means one instruction is not enough).
@@ -527,26 +535,24 @@ So on the MC1 both STB and STW hang when STOP follows directly or after one
 NOP; two or more instructions in between are enough. The loader and stage 1
 keep five instructions between STB and STOP, so they are safe.
 
-## Multiplier speed (CFGR.MS0, `tools/multest/`)
+## Multiplier speed (CFGR.MS0)
 
 CFGR bit 5 (MS0) is a high-speed multiply mode that must stay 0 at 21 MHz.
 The monitor's `m 1` sets it (it is refused while the clock is 21.4 MHz, and `c 1`
 is refused while MS0 is set); `i` then shows ` MS0=1` in the banner. The
 diagnostic build always uses CFGR=80.
 
-Benchmark: `tools/multest/mul_bench.load` (load and entry `$0200`, 342 bytes;
-`python3 tools/multest/make.py [iterations [outdir]]` rebuilds it with a
-listing). It runs five phases of 65535 x 32 identical operations from the
-cache and writes a marker letter between them: `N` (32 NOPs, baseline), `M`
-MULT, `U` UMULT (ALT1 + MULT), `F` FMULT, `L` LMULT (ALT1 + FMULT), then `E`.
-`tools/multest/run.py PORT [10|21] [ms0]` (needs pyserial; run it right after a reset) sets the clock and MS0 with the monitor commands, sends `l`, waits for READY, sends the
-file, timestamps the letters and prints cycles per operation =
-(T_phase - T_N) / (65535 x 32) x clock + 1. The `U` and `L` rows include the
+Benchmark: a program (load and entry `$0200`, 342 bytes) with five phases of
+65535 x 32 identical operations from the cache and a marker letter written
+between them: `N` (32 NOPs, baseline), `M` MULT, `U` UMULT (ALT1 + MULT), `F`
+FMULT, `L` LMULT (ALT1 + FMULT), then `E`. A PC program sets the clock and MS0
+with the monitor commands, sends `l` and the file, timestamps the letters and
+computes cycles per operation = (T_phase - T_N) / (65535 x 32) x clock + 1. The `U` and `L` rows include the
 prefix byte. The clock for the cycle counts is the one it selected (10 = 10.7 MHz,
 the default, or 21 = 21.4 MHz). The 21.4 MHz row below was measured with MS0
 forced to 0 in an earlier build.
 
-Results (cycles per operation as printed by `run.py`, one run each):
+Results (cycles per operation, one run each):
 
 | Chip | Clock | MS0 | MULT | UMULT (ALT1+) | FMULT | LMULT (ALT1+) |
 |------|-------|-----|------|---------------|-------|---------------|
@@ -638,7 +644,7 @@ Confirmed on the cart:
 - The GSU clock source is the oscillator on the cart; the chip is a GSU-1
   (VCR=04).
 
-- The hand-assembled echo demo (now `tools/echo_demo.load`, +1) was assembled with the bass
+- The hand-assembled echo demo (+1) was assembled with the bass
   assembler by the user: the generated bytes match, and it runs on both the
   GSU-1 and the MC1. (`loader_prog` and `boot_prog` were not compared with
   assembler output; they run correctly on the cart.)

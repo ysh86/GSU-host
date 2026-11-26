@@ -1,4 +1,4 @@
-# AGENTS.md — gsu-host (v1.3.0)
+# AGENTS.md — GSU-host (v1.3.0)
 
 Notes for AI agents (and humans) picking this project up. `README.md` is the
 user-facing doc (wiring, protocol, usage); this file covers how to work on it.
@@ -22,12 +22,6 @@ system call into USB serial (0 nop, 1 exit, 3 read, 4 write, 28 fstat; 43 times 
 | `README.md`           | wiring, loader protocol, syscall table, verification status, optimization ideas |
 | `CHANGELOG.md`        | release notes from 1.0.0; add an entry for every version |
 | `docs/cache-and-chip-notes.ja.md` | Japanese notes: GSU cache behaviour and GSU-1 vs MC1 measurements |
-| `tools/check.sh`      | syntax check (both program modes) + simulator run |
-| `tools/gsusim.py`     | mini GSU simulator; reads the programs and the A10-A14 constants from `gsu_host.c`; models stage 1 + loader, exit, echo demo, measure, hang test |
-| `tools/hangtest/`     | `make.py` builds `hang_test.load` (STB/STW-then-STOP test, load at $0200); checked in `gsusim.py` |
-| `tools/multest/`      | `make.py` builds `mul_bench.load` (MULT/UMULT/FMULT/LMULT timing, for CFGR.MS0); `run.py` times it from a PC (pyserial; not run on hardware) |
-| `tools/exit_test.load` | 7-byte program (exit in a loop) for trying the monitor; checked in `gsusim.py` |
-| `tools/stubs/`        | stub Pico SDK headers, only for the syntax check |
 
 ## Status: confirmed on a GSU-1 and an MC1, including the loader
 
@@ -40,9 +34,8 @@ characters return +1), so the read/write/fstat syscalls work; and the
 measurement build gave 12.4 us and about 80,900 syscalls/s (bus read 1686 ns,
 write 1712 ns, BUS_DELAY_CYCLES 64 at 125 MHz; 7 bus accesses per syscall).
 The RAM loader and LJMP also work: the user loaded a binary build of the echo
-program and it ran. `tools/check.sh` proves the
-C parses and that the programs behave on a simulator written from reading the
-docs; it does not prove hardware behaviour. `[VERIFY]` marks what is not
+program and it ran. Nothing here is tested without the cart: the authoring sandbox only checked that the
+C parses, which does not prove hardware behaviour. `[VERIFY]` marks what is not
 confirmed on hardware: the effect of `c` / `m` on the clock (the monitor and the loader are confirmed on the GSU-1 and the MC1;
 the GSU-2 was not run with the monitor and is assumed like the GSU-1; listed under "Still to verify" in the README). The A10-A14 pins
 and the RAM window (host write/readback) are confirmed on the GSU-1 and GSU-2,
@@ -73,20 +66,19 @@ above (convention: $0200). The clock is chosen in the monitor (`c 0|1`, default 
    `$0000-$004F` holds the loader and must not be written: on the MC1, `l`
    after a program has run restarts it from there (`gsu_boot(true)`).
    Examples and new tools use this unless there is a reason not to.
-1. Run `tools/check.sh` after every edit to `gsu_host.c`.
-2. `loader_prog`, `boot_prog` and `measure_prog` are hand-assembled. The comment above each
-   array, the bytes, and the README must agree. The simulator reads the
-   bytes from the C file, so a wrong byte shows up there, but a wrong
-   comment does not.
-3. Take opcodes from the table in the Yoshi's Island disassembly wiki (URL
+1. `loader_prog`, `boot_prog` and `measure_prog` are hand-assembled. The comment above each
+   array, the bytes, and the README must agree.
+2. Take opcodes from the table in the Yoshi's Island disassembly wiki (URL
    in README), not from memory. A memory-based BEQ (0x0A, actually BPL)
    already broke the demo once. BNE = 0x08, BEQ = 0x09, BRA = 0x05.
-4. Extend the simulator when you use a new opcode; it raises on any
-   opcode it does not model.
-5. Keep the user's conversation language in mind: the user writes Japanese.
+3. Keep the user's conversation language in mind: the user writes Japanese.
    Code, comments and docs here are English.
 
 ## GSU facts that are easy to get wrong (sources in README)
+
+- On the MC1, a program that writes R14 (the ROM address pointer) went wrong after
+  the first syscall (it ran code of the previously loaded program). Keep R14 out of
+  programs that must run on the MC1; use R12/R13 or RAM (README, MC1 section).
 
 - STOP clears GO, sets IRQ, leaves R15 = STOP + 2. The byte after STOP is
   prefetched, not executed: it is a dummy, and resume skips it. No NOP is
@@ -147,7 +139,7 @@ above (convention: $0200). The clock is chosen in the monitor (`c 0|1`, default 
 
 ## Not done yet
 
-- The echo demo (`tools/echo_demo.load`) was cross-checked with bass (bytes match, runs on both chips);
+- The echo demo was cross-checked with bass (bytes match, runs on both chips);
   `loader_prog` and `boot_prog` were not, but they run on the cart.
 - The README open questions (causes unknown, no action planned). Speed work (BUS_DELAY_CYCLES tuning, loader timing, block
   syscalls) is only noted under "Optimization ideas" in the README.
@@ -159,7 +151,7 @@ above (convention: $0200). The clock is chosen in the monitor (`c 0|1`, default 
   A15-A22 low. The 16 expansion-terminal pins are unconnected on all three boards (SYSTEM
   CLK on 1C0N excepted); PHI2 is unconnected on all three; every cart has a CIC but it is not connected to the Super FX, so the CIC pins stay open. GSU-2
   (VCR=04) also worked with A23 open; tie it to GND anyway. The MC1 hang reported for an STB
-  immediately followed by STOP was reproduced with `tools/hangtest/` (MC1 hangs
+  immediately followed by STOP was reproduced on the MC1 (hangs
   with 0 or 1 NOP between the write and STOP, 2 or more are fine; GSU-1 no
   hang); the loader and stage 1 keep several instructions between STB and the
   next STOP.

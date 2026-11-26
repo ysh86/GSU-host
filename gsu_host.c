@@ -27,7 +27,7 @@
 // STATUS: confirmed on hardware, on a GSU-1 and on a MARIO chip (MC1): bus,
 // registers, cache, start/STOP/resume, syscalls and the RAM loader (see the
 // README). The STB-then-STOP hang (fullsnes) was reproduced on the MC1 and is
-// absent on the GSU-1 (tools/hangtest). On the MC1, 0 or 1 NOP between the write
+// absent on the GSU-1. On the MC1, 0 or 1 NOP between the write
 // and STOP hangs, 2 or more are fine.
 // A10-A14 on GP21-GP25 and the RAM window (diag [8], host write/readback) are
 // confirmed on a GSU-1 and a GSU-2; on the MC1 (board 1C0N) the window neither
@@ -126,7 +126,7 @@ static bool applied_clk21, applied_ms0;  // what is in the chip now (CFGR cannot
 // Watchdog: -DGSU_WATCHDOG_MS=500 prints "TIMEOUT: GSU still running" into the
 // output every 500 ms while the GSU runs without a syscall. Off by default (0): a
 // program may legitimately compute for seconds, and the message would land in the
-// binary stream. Turn it on to see hangs (tools/hangtest, MC1 21 MHz runaway).
+// binary stream. Turn it on to see hangs (STB-then-STOP on the MC1, MC1 21 MHz runaway).
 #ifndef GSU_WATCHDOG_MS
 #define GSU_WATCHDOG_MS 0
 #endif

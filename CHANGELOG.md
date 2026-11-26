@@ -10,9 +10,13 @@ Verified on a GSU-1 and the MC1 (the GSU-2 was not run with the monitor and is
 assumed like the GSU-1). Open: the effect of `c` / `m` is not measured, and the
 GSU-1 reads CBR=0040 for a program entered at `$0200` (README "Still to verify").
 
+- Changed: an unknown syscall number prints `BAD OP xx R15=xxxx` and enters the
+  monitor (it used to hang the firmware). `g` and `t` are refused, `l` works.
+- Documented: on the MC1, programs must not write R14 (a program using R14 ran
+  old code after the first syscall; keeping the value in RAM fixed it).
 - Changed (breaking): the status syscall is now `fstat` with number 28 (was
   STATUS 2). Programs that call status must use `IBT R3,#28`
-  (`tools/echo_demo.load` is updated). Number 2 now stops with `BAD OP`.
+  (the echo demo bytes are updated). Number 2 now stops with `BAD OP`.
 - Added: syscall number 43 `times` is reserved (not implemented; `BAD OP`).
 - Added: monitor command `t`: like `g`, and at the next exit it prints
   `time 12.345 ms (GSU run 12.100 ms, 34 syscalls)`: wall time from the resume
@@ -57,12 +61,11 @@ Monitor, new syscall ABI, unified loader, runtime clock and multiplier settings.
 - Added: one loader for every chip: stage 1 in cache line 0 pulls the loader
   into cart RAM at `$0000`, which LJMPs to bank `$70`. The cache-resident loader
   on the GSU-1 is gone. Payloads load at `$0200` by convention.
-- Added: diagnostic [8] (RAM window), MS0 (CFGR bit 5) support, the multiplier
-  benchmark `tools/multest/` with measurements (MS0=1 makes UMULT/FMULT/LMULT
+- Added: diagnostic [8] (RAM window), MS0 (CFGR bit 5) support, the multiplier benchmark with measurements (MS0=1 makes UMULT/FMULT/LMULT
   3-4 cycles faster on the GSU-1A at 10.7 MHz; no effect on the MC1; 21.4 MHz
   gains only 8-15 % on multiplies), board and chip wiring tables, the version
   in the banner (`GSU host v1.2.0: ...`).
-- Added: `tools/echo_demo.load` (echo +1) and `tools/exit_test.load`.
+- Added: an echo demo (+1) and a 7-byte exit program as loader streams.
 - Changed (breaking): the syscall number is in R3 (was R1) and follows Unix:
   NOP 0, EXIT 1, STATUS 2 (unchanged), READ 3, WRITE 4. R3 is reserved for it.
   Programs built for the old ABI stop with `BAD OP`. The loader keeps its RAM
@@ -71,7 +74,7 @@ Monitor, new syscall ABI, unified loader, runtime clock and multiplier settings.
   was the default except on the MC1). Use `c 1` for 21.4 MHz.
 - Changed: the hang watchdog is off by default (`-DGSU_WATCHDOG_MS`).
 - Removed: `GSU_MC1` (the MC1 is detected from VCR=01), `GSU_CLOCK_21MHZ`,
-  `GSU_MS0`, `GSU_PROGRAM_DEMO` (the demo moved to `tools/echo_demo.load`),
+  `GSU_MS0`, `GSU_PROGRAM_DEMO` (the demo is now a loader stream),
   `RELOAD_CACHE_ON_RESUME`, `GSU_TRACE`, `GSU_BOOT_STAGE1`, and the optional
   GSU clock output pin.
 
@@ -91,5 +94,5 @@ First complete version.
   two-stage boot because the MC1 runs host-written code from one cache block
   only).
 - Diagnostic build, throughput measurement build, the STB-then-STOP hang test
-  (hangs on the MC1, not on the GSU-1), a simulator-based `tools/check.sh`, and
+  (hangs on the MC1, not on the GSU-1), and
   `docs/cache-and-chip-notes.ja.md`.
