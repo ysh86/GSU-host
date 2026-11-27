@@ -1,4 +1,4 @@
-# GSU-host v1.3.0
+# GSU-host v1.3.1
 
 Pico (RP2040) firmware that drives a real Super FX cartridge as a
 stand-alone processor.
@@ -244,7 +244,7 @@ instead of using /IRQ.
 
 After reset the firmware prints a line such as
 
-    GSU host v1.3.0: VCR=01 SFR=0000 CLK=10.7MHz MODE=loader
+    GSU host v1.3.1: VCR=01 SFR=0000 CLK=10.7MHz MODE=loader
 
 with the version register, the status flags, the clock the host selects
 (`CLK` is the value the firmware writes to CLSR; CLSR cannot be read back) and
@@ -288,6 +288,10 @@ the same syscalls through STOP. Notes:
   it. **Never write $0000-$004F:** that is where the loader stays, and on the
   MC1 `l` after a program has run restarts the loader from there (see below).
   $0200 is also above the loader, so one binary runs on every chip.
+- **Start the program with `CACHE` (`$02`).** The loader jumps with LJMP from
+  $004E, which leaves CBR=$0040; without `CACHE` only $0200-$023F of the program is
+  cached and everything after it runs at ROM/RAM speed (about 3 cycles per
+  byte). `CACHE` makes the window $0200-$03FF (see "Multiplier speed").
 - Assemble the payload for the address you load it at. Load and entry
   addresses are independent, so data can sit below the code.
 - On the MC1, `l` after a program has run (from the monitor after an exit) does
@@ -542,75 +546,92 @@ The monitor's `m 1` sets it (it is refused while the clock is 21.4 MHz, and `c 1
 is refused while MS0 is set); `i` then shows ` MS0=1` in the banner. The
 diagnostic build always uses CFGR=80.
 
-Benchmark: a program (load and entry `$0200`, 342 bytes) with five phases of
-65535 x 32 identical operations from the cache and a marker letter written
-between them: `N` (32 NOPs, baseline), `M` MULT, `U` UMULT (ALT1 + MULT), `F`
-FMULT, `L` LMULT (ALT1 + FMULT), then `E`. A PC program sets the clock and MS0
-with the monitor commands, sends `l` and the file, timestamps the letters and
-computes cycles per operation = (T_phase - T_N) / (65535 x 32) x clock + 1. The `U` and `L` rows include the
-prefix byte. The clock for the cycle counts is the one it selected (10 = 10.7 MHz,
-the default, or 21 = 21.4 MHz). The 21.4 MHz row below was measured with MS0
-forced to 0 in an earlier build.
+Method: one small program per instruction (load and entry `$0200`): `CACHE`,
+then a `LOOP` over 32 identical operations (56470 iterations) from the cache, then
+EXIT and a jump back to the start. `l`, send the file, then `t` prints the time of
+a full run (`GSU run`). Variants: `N` (32 NOPs, baseline), `M` MULT, `U` UMULT
+(ALT1 + MULT), `F` FMULT, `L` LMULT (ALT1 + FMULT). Cycles per operation =
+(T_X - T_N) / (56470 x 32) x clock + 1; the `U` and `L` rows include the prefix
+byte. The clock comes from the NOP baseline (1 cycle each): 10.708 MHz and
+21.415 MHz on the GSU-1A cart.
 
-Results (cycles per operation, one run each):
+**Start every program with `CACHE` ($02).** The loader's final LJMP leaves
+CBR=$0040 (the address it jumps from, not the target), so the cache window is
+$0040-$023F and a program at $0200 gets only its first 64 bytes cached. `CACHE`
+as the first instruction sets CBR = R15 & $FFF0 = $0200 and the window becomes
+$0200-$03FF (512 bytes). Measured with N NOPs in a LOOP, GSU-1A and MC1: without
+`CACHE` the cost per instruction is 1.00 / 1.55 / 2.26 / 2.62 cycles for N = 32 / 64 /
+128 / 256 (about 48 loop bytes cached, the rest at about 3 cycles per byte); with
+`CACHE` it is 1.00 for all of them.
 
-| Chip | Clock | MS0 | MULT | UMULT (ALT1+) | FMULT | LMULT (ALT1+) |
-|------|-------|-----|------|---------------|-------|---------------|
-| MC1 (1C0N) | 10.7 MHz | 0 | 3.33 | 9.22 | 11.21 | 14.20 |
-| MC1 (1C0N) | 10.7 MHz | 1 | 3.33 | 9.22 | 11.21 | 14.20 |
-| GSU-1A (1CA6B-01, VCR=04) | 10.7 MHz | 0 | 3.35 | 9.27 | 11.28 | 14.29 |
-| GSU-1A (1CA6B-01, VCR=04) | 10.7 MHz | 1 | 3.25 | 6.25 | 7.24 | 10.24 |
-| GSU-1A (1CA6B-01, VCR=04) | 21.4 MHz | 0 (forced) | 5.54 | 11.53 | 12.53 | 17.55 |
+Results (GSU-1A, 1CA6B-01, VCR=04, from the cache):
 
-The same in time (cycles / clock):
+| Clock | MS0 | MULT | UMULT (ALT1+) | FMULT | LMULT (ALT1+) |
+|-------|-----|------|---------------|-------|---------------|
+| 10.7 MHz | 0 | 1 | 3 | 8 | 9 |
+| 10.7 MHz | 1 | 1 | 2 | 4 | 5 |
+| 21.4 MHz | 0 | 1 | 3 | 8 | 9 |
 
-| Chip, clock, MS0 | MULT | UMULT | FMULT | LMULT |
-|------------------|------|-------|-------|-------|
-| MC1, 10.7 MHz, 0 or 1 | 311 ns | 862 ns | 1048 ns | 1327 ns |
-| GSU-1A, 10.7 MHz, 0 | 312 ns | 863 ns | 1050 ns | 1331 ns |
-| GSU-1A, 10.7 MHz, 1 | 304 ns | 584 ns | 677 ns | 957 ns |
-| GSU-1A, 21.4 MHz, 0 | 258 ns | 537 ns | 583 ns | 817 ns |
+The same in time:
 
-Documented cycle counts for comparison (instruction pages on sneslab.net, cache
-speed; ROM/RAM speed adds 2-3 cycles; the page says only that the value depends
-on CFGR, not which value belongs to MS0=1; the smaller one is the natural reading
-and fits FMULT/LMULT below):
+| Clock, MS0 | MULT | UMULT | FMULT | LMULT |
+|------------|------|-------|-------|-------|
+| 10.7 MHz, 0 | 93 ns | 280 ns | 747 ns | 840 ns |
+| 10.7 MHz, 1 | 93 ns | 187 ns | 374 ns | 467 ns |
+| 21.4 MHz, 0 | 47 ns | 140 ns | 374 ns | 420 ns |
 
-| | MULT | UMULT (incl. ALT1) | FMULT | LMULT (incl. ALT1) |
-|---|------|-------|-------|-------|
-| Documented, cache | 1 or 2 | 2 or 3 | 4 or 8 | 5 or 9 |
-| Documented, ROM/RAM | 3 or 5 | 6 or 8 | 7 or 11 | 10 or 14 |
-| Measured MS0=0 -> 1 (change) | 3.35 -> 3.25 (-0.1) | 9.27 -> 6.25 (-3) | 11.28 -> 7.24 (-4) | 14.29 -> 10.24 (-4) |
-
-The FMULT and LMULT changes (-4) match the documented 8 -> 4 and 9 -> 5. UMULT
-changes by 3 where the documentation gives 1, and MULT hardly changes where it
-gives 1. The measured absolute values are 3-7 cycles above the documented cache
-speed even though the loop runs from the cache (NOP baseline 1.03 cycles), so the
-documented counts are a guide to the ratios only.
-
-The NOP baseline is 1.03 cycles per instruction, so the cache runs the loop at
-full speed. The multiply costs are above the 1-9 cycles the sources list (the
-prefix rows include one cycle for ALT1); treat them as measured values for this
-setup.
+Documented cycle counts (instruction pages on sneslab.net, cache speed):
+MULT 1 or 2, UMULT 2 or 3, FMULT 4 or 8, LMULT 5 or 9 (ROM/RAM speed adds 2-3 or
+more). UMULT, FMULT and LMULT match them: MS0=0 gives the larger value, MS0=1 the
+smaller one. MULT matches too, with one detail: in a run of identical MULTs it
+costs 1.03 cycles at MS0=0 (1.00 at MS0=1), but an isolated MULT (MULT ; NOP, 16
+times) costs 2 cycles at MS0=0 and 1 at MS0=1, at 10.7 and at 21.4 MHz. So the
+second cycle of a standard-speed MULT overlaps with a MULT that follows it, and
+the table's MULT 1 is the cost inside a run. The UMULT/FMULT/LMULT rows were also
+measured in runs; isolated costs were not measured. `[VERIFY]`
 
 Findings.
 
-1. **MS0=1 works on the GSU-1A at 10.7 MHz.** UMULT, FMULT and LMULT take 3, 4
-   and 4 cycles less (FMULT 1050 ns -> 677 ns, 36 % faster); MULT (8 x 8) does
-   not change. With MS0=0 the GSU-1A and the MC1 give the same numbers.
-2. **The MC1 ignores MS0** (identical results with 0 and 1). CFGR is
-   write-only, so the bit cannot be read back; `gsu_boot()` writes CFGR=A0 once
-   and nothing rewrites it.
-3. **The multiplier does not scale with the clock.** At 21.4 MHz the cycle count
-   goes up (FMULT about 7 -> 12.5), so multiplies are only 8-15 % faster in
-   time than at 10.7 MHz with MS0=1, and MS0 cannot be used at 21.4 MHz.
-   Multiply-heavy code gains almost nothing from 21.4 MHz.
-4. GSU-2: not measured. It is assumed to behave like the GSU-1A (same VCR=04
-   family), so `c 0` + `m 1` is the setting to try.
+1. **MS0=1 works on the GSU-1A at 10.7 MHz:** UMULT, FMULT and LMULT take 1, 4
+   and 4 cycles less (FMULT 747 ns -> 374 ns); MULT (8 x 8) does not change.
+2. **The multiplier scales with the clock from the cache.** At 21.4 MHz with
+   MS0=0 the cycle counts are the same as at 10.7 MHz, so every multiply takes
+   half the time; FMULT (374 ns) equals 10.7 MHz with MS0=1, and the others are
+   faster. MS0 must stay 0 at 21.4 MHz, so on the GSU-1/GSU-2 use `c 1` for
+   everything; `m 1` only helps when you stay at 10.7 MHz.
+3. An earlier benchmark started without `CACHE`, so its multiply loops ran
+   outside the cache window (ROM/RAM speed): GSU-1A 10.7 MHz MS0=0 gave 3.35 / 9.27 /
+   11.28 / 14.29 cycles and MS0=1 3.25 / 6.25 / 7.24 / 10.24, 21.4 MHz 5.54 / 11.53 /
+   12.53 / 17.55 (so "multiplies gain only 8-15 % at 21.4 MHz" was a result of
+   that, not of the multiplier). On the MC1 the same benchmark gave 3.33 / 9.22 /
+   11.21 / 14.20 with MS0 0 and 1 alike, so the MC1 seems to ignore MS0. `[VERIFY]`
+   with the cached programs, which were not run for the multiplies on the MC1.
+4. **MC1, from the cache** (10.7 MHz, runs of identical instructions): MULT 1.03,
+   UMULT 3.00, LMULT 9.00 cycles, the same with MS0 0 and 1, so the MC1 ignores
+   MS0 (confirmed with the cached programs). FMULT is 8.00 cycles with a nonzero
+   operand (`FROM R1 ; FMULT`) but 4.78 in a run where R0, its source, has become
+   0: on the MC1 the FMULT time depends on the data. (The GSU-1A took 8 in the
+   zero-operand run too; its nonzero case was not measured.) `[VERIFY]` At 21.4 MHz
+   the MC1 does not return from the test (the known runaway).
+5. **MC1 hangs** on three short multiply sequences that run on the GSU-1A: 16 x
+   (MULT ; NOP), and 32 x (FROM R1 ; ALT1 ; LMULT) in two lengths of run (1000
+   and 56470 iterations). Runs of identical multiplies and 32 x (FROM R1 ;
+   FMULT) are fine, and so is `mult_check` (single multiplies of each kind in a
+   straight line). The cause is unknown. The two ways to reach the hang, a
+   multiply followed by a different instruction, may be what matters. `[VERIFY]`
+   Avoid long loops that mix multiplies with other instructions on the MC1
+   until this is understood; the GSU-1A is not affected (the isolated-MULT
+   test ran there; FROM + LMULT was not run on it).
+6. GSU-2: not measured, assumed like the GSU-1A (same VCR=04 family).
 
-Use: for multiply-heavy programs on the GSU-1/GSU-2, type `c 0` and `m 1` in the
-monitor before `l`; for everything else `c 1` (21.4 MHz) is faster. On the MC1
-stay at `c 0` (MS0 has no effect there).
+All cached results agree with the documented cycle counts (cache speed); the
+documentation says nothing about data dependence, the MC1's ignoring of MS0, or
+the hangs. The earlier uncached figures cannot be compared with the ROM/RAM
+column: only the first 64 bytes of a program were cached, so the numbers are a
+mixture.
+
+Use: on the GSU-1/GSU-2 start programs with `CACHE` and use `c 1` (21.4 MHz);
+at 10.7 MHz (`c 0`) add `m 1` for multiply-heavy code. On the MC1 stay at `c 0`.
 
 ## Verification status
 
@@ -639,6 +660,7 @@ Confirmed on the cart:
 - The `t` figure "GSU run" has a floor of about 1.9 us per syscall (the Pico
   polls SFR over the slow bus), the same at 10.7 and 21.4 MHz. It is accurate
   for long computations between syscalls, not for syscall-heavy loops.
+- The cache window: after the loader, CBR=$0040 (window $0040-$023F); a program that starts with `CACHE` runs 256 NOPs in a loop at 1 cycle each (GSU-1A and MC1).
 - Throughput of the syscall path (measurement build).
 - The Pico SDK build, including `tusb.h` for `USE_TUD_TX_STATUS`.
 - The GSU clock source is the oscillator on the cart; the chip is a GSU-1
@@ -661,12 +683,6 @@ Still to verify:
    the commands run and the program keeps working, but the effect is not
    measured (the "GSU run" figure of `t` is dominated by polling latency for
    syscall-heavy programs).
-2. CBR on the GSU-1: `r` shows `CBR=0040` after a program loaded and entered at
-   `$0200` (LJMP to $0200 should give $0200). If the cache window really starts
-   at $0040, only the first 64 bytes of a program at $0200 are cached, which
-   would also explain why the measured multiplier cycle counts are close to the
-   ROM/RAM column of the documentation. A NOP-loop test of the cached span
-   would tell (not built).
 
 Not tested, assumed like the GSU-1 (VCR=04 family): the monitor and CFGR.MS0 on the
 GSU-2. A10-A14 and the RAM window are confirmed on the GSU-2 (diag).
@@ -696,7 +712,6 @@ Open questions, cause unknown (no action planned; notes and ideas for
 investigating each are in `docs/cache-and-chip-notes.ja.md`, section 5):
 
 - The MC1 runs away at 21 MHz in long programs (short diagnostics pass).
-- The GSU-1 shows CBR=0040 for a program entered at $0200 (see "Still to verify").
 - Why the MC1 uses host-written cache code only in the block that ran last.
 - Why SFR reads 8000 after STOP on the MC1 (0000 on the GSU-1); harmless, the
   firmware clears it.

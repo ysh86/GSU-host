@@ -4,11 +4,31 @@ Newest first. "Confirmed" means run on hardware (GSU-1 = 1CA6B-01 VCR=04,
 GSU-2 = 1CB5B-01 VCR=04, MC1 = 1C0N VCR=01); anything else is in the README
 under "Still to verify".
 
+## 1.3.1
+
+Documentation and version only; the firmware behaves as in 1.3.0.
+
+- Found and documented: the loader's final LJMP leaves CBR=$0040, so the cache
+  window is $0040-$023F and a program at `$0200` is cached for 64 bytes only.
+  Programs must start with `CACHE` ($02); then a loop of 256 NOPs runs at 1 cycle
+  per instruction on the GSU-1A and the MC1 (without it 1.0 / 1.55 / 2.26 / 2.62
+  cycles for 32 / 64 / 128 / 256 NOPs). This explains `CBR=0040` and the
+  multiplier results that looked like ROM/RAM speed.
+- Changed: the multiplier section. Cached on the GSU-1A: MULT 1, UMULT 3, FMULT 8,
+  LMULT 9 cycles (MS0=0); UMULT 2, FMULT 4, LMULT 5 (MS0=1); the same cycles at
+  21.4 MHz (MS0=0), i.e. half the time. UMULT, FMULT and LMULT equal the documented cycle counts (MS0=0 the larger, MS0=1 the smaller); MULT costs 2 cycles at MS0=0 and 1 at MS0=1 when isolated (1.03 / 1.00 in a run of MULTs, the second cycle overlaps the next MULT), as documented (1 or 2). The
+  advice changes to `c 1` for everything on the GSU-1/GSU-2 (`m 1` only at 10.7 MHz).
+  The earlier uncached table is kept for reference.
+- Found on the MC1 (cached): MS0 is ignored; FMULT is 8 cycles with a nonzero operand and
+  4.78 in a run where the source register is 0; short sequences of multiplies mixed with
+  other instructions hang the chip (16 x MULT;NOP and 32 x FROM;ALT1;LMULT), the GSU-1A
+  runs them. Causes unknown.
+
 ## 1.3.0
 
 Verified on a GSU-1 and the MC1 (the GSU-2 was not run with the monitor and is
 assumed like the GSU-1). Open: the effect of `c` / `m` is not measured, and the
-GSU-1 reads CBR=0040 for a program entered at `$0200` (README "Still to verify").
+GSU-1 reads CBR=0040 for a program entered at `$0200` (explained in 1.3.1).
 
 - Changed: an unknown syscall number prints `BAD OP xx R15=xxxx` and enters the
   monitor (it used to hang the firmware). `g` and `t` are refused, `l` works.

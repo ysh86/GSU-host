@@ -76,7 +76,7 @@
 
 // TDRE uses the TinyUSB CDC write FIFO. Set to 0 to report TDRE = "USB
 // connected" using only the stdio API.
-#define GSU_HOST_VERSION "1.3.0"
+#define GSU_HOST_VERSION "1.3.1"
 
 #ifndef USE_TUD_TX_STATUS
 #define USE_TUD_TX_STATUS  1

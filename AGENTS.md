@@ -1,4 +1,4 @@
-# AGENTS.md — GSU-host (v1.3.0)
+# AGENTS.md — GSU-host (v1.3.1)
 
 Notes for AI agents (and humans) picking this project up. `README.md` is the
 user-facing doc (wiring, protocol, usage); this file covers how to work on it.
@@ -76,6 +76,14 @@ above (convention: $0200). The clock is chosen in the monitor (`c 0|1`, default 
 
 ## GSU facts that are easy to get wrong (sources in README)
 
+- On the MC1, tight loops that mix multiplies with other instructions (16 x MULT;NOP,
+  32 x FROM;ALT1;LMULT) hung the chip, while runs of identical multiplies were fine; the
+  GSU-1A is not affected (README "Multiplier speed" finding 5). Unexplained.
+
+- Programs loaded by the loader must start with `CACHE` ($02): the loader's LJMP leaves
+  CBR=$0040 (window $0040-$023F), so without it a program at $0200 is cached for 64
+  bytes only and runs at ROM/RAM speed after that (measured on the GSU-1A and MC1).
+
 - On the MC1, a program that writes R14 (the ROM address pointer) went wrong after
   the first syscall (it ran code of the previously loaded program). Keep R14 out of
   programs that must run on the MC1; use R12/R13 or RAM (README, MC1 section).
@@ -125,9 +133,9 @@ above (convention: $0200). The clock is chosen in the monitor (`c 0|1`, default 
   VCR=01 (only used to disable `d` and warn on `c 1`). There are no
   `GSU_MC1`, `GSU_CLOCK_21MHZ` or `GSU_MS0` defines any more. The diagnostic build
   uses CLSR=01 and CFGR=80 itself. Measured (README "Multiplier speed"): on the GSU-1A at
-  10.7 MHz it makes UMULT/FMULT/LMULT 3-4 cycles faster (FMULT 1050 -> 677 ns);
-  the MC1 ignores it; the GSU-2 is assumed like the GSU-1A (not measured). 21.4 MHz
-  speeds up multiplies by only 8-15 % in time (the cycle counts rise).
+  10.7 MHz it makes UMULT/FMULT/LMULT 1/4/4 cycles faster from the cache (FMULT 747 -> 374 ns);
+  the MC1 seems to ignore it (measured uncached only); the GSU-2 is assumed like the GSU-1A (not measured).
+  From the cache the multiplier scales with the clock: 21.4 MHz (MS0=0) takes half the time, so use `c 1`.
 - The loader build starts in the monitor after reset and loads only on `l`
   (`monitor(false)`, then `gsu_boot()`); the measure build starts the GSU
   directly and runs from the cache. Loading is always two-stage (`gsu_boot()`).
