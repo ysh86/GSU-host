@@ -4,6 +4,14 @@ Newest first. "Confirmed" means run on hardware (GSU-1 = 1CA6B-01 VCR=04,
 GSU-2 = 1CB5B-01 VCR=04, MC1 = 1C0N VCR=01); anything else is in the README
 under "Still to verify".
 
+## 1.4.1
+
+- Added: GP28 drives A15 (cart pin 40; idle Low), so the bank $70 dump (`d` through `b 1`,
+  the MC1 default) reads 0000-FFFF (64 KB, the whole RAM of the Wild Trax cart) instead of
+  0000-7FFF. Wiring: A15 (pin 40) moves from GND to GP28; boards without the change still
+  work (the dump then shows the 32 KB mirrored).
+- Fixed: the dump loop used a 16-bit row counter, which would wrap at $FFF0.
+
 ## 1.4.0
 
 - Added: GP26 (A20+A21+A22, bank $70 when High) and GP27 (/ROMSEL, Low selects the cart's

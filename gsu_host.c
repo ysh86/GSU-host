@@ -59,14 +59,16 @@
 #define AH_MASK    (0x1Fu << PIN_A10)
 #define PIN_BANK   26              // A20+A21+A22 (cart pins 45-47, joined): High = bank $70
 #define PIN_ROMSEL 27              // /ROMSEL (/CART, cart pin 49): Low = ROM/RAM region selected
+#define PIN_A15    28              // A15 (cart pin 40), only for the bank $70 dump
+#define A15_MASK   (1u << PIN_A15)
 #define SEL_MASK   ((1u << PIN_BANK) | (1u << PIN_ROMSEL))
 
 // A10..A14 are driven by the Pico: bit 0 = A10 ... bit 4 = A14.
 //   AH_REGS: A12=1, A13=1 (A10, A11, A14 = 0)  -> $3000-$33FF, the GSU registers
 //   AH_RAM : A13=1, A14=1, A12..A10 = block    -> $6000-$7FFF, cart RAM window
-// A15, A16-A19 and A23 must be hard-wired low. A20-A22 (joined) and /ROMSEL are driven
-// by GP26 and GP27 (idle: A20-A22 low, /ROMSEL high, so the cart decodes bank $00 as
-// with the earlier hard-wired levels; a board without these two wires is unaffected).
+// A16-A19 and A23 must be hard-wired low. A20-A22 (joined), /ROMSEL and A15 are driven
+// by GP26, GP27 and GP28 (idle: A20-A22 low, /ROMSEL high, A15 low, so the cart decodes
+// bank $00 as with the earlier hard-wired levels; a board without these wires is unaffected).
 // Only the monitor's RAM dump through bank $70 (`b`, the MC1 default) uses them.
 // A23 is connected on only one of the three inspected boards (README, "Boards and chips").
 // There is no clock output: a cart that needs SYSTEM CLK gets an external
@@ -81,7 +83,7 @@
 
 // TDRE uses the TinyUSB CDC write FIFO. Set to 0 to report TDRE = "USB
 // connected" using only the stdio API.
-#define GSU_HOST_VERSION "1.4.0"
+#define GSU_HOST_VERSION "1.4.1"
 
 #ifndef USE_TUD_TX_STATUS
 #define USE_TUD_TX_STATUS  1
@@ -161,13 +163,13 @@ static inline void bus_delay(void) { busy_wait_at_least_cycles(BUS_DELAY_CYCLES)
 
 static void bus_init(void) {
     const uint32_t ctl = (1u << PIN_RD) | (1u << PIN_WR) | (1u << PIN_RESET);
-    gpio_init_mask(A_MASK | AH_MASK | D_MASK | ctl | SEL_MASK);
+    gpio_init_mask(A_MASK | AH_MASK | D_MASK | ctl | SEL_MASK | A15_MASK);
     // A0-A9 = 0, A10-A14 = register window, strobes inactive (high)
     gpio_put_masked(A_MASK | AH_MASK | ctl, ((uint32_t)AH_REGS << PIN_A10) | ctl);
     gpio_set_dir_out_masked(A_MASK | AH_MASK | ctl);
     // bank $00 (A20-A22 low), /ROMSEL high
-    gpio_put_masked(SEL_MASK, 1u << PIN_ROMSEL);
-    gpio_set_dir_out_masked(SEL_MASK);
+    gpio_put_masked(SEL_MASK | A15_MASK, 1u << PIN_ROMSEL);
+    gpio_set_dir_out_masked(SEL_MASK | A15_MASK);
     gpio_set_dir_in_masked(D_MASK);
 }
 
@@ -211,30 +213,30 @@ static void cart_reset(void) {
 // reg_read()/reg_write() can be used straight afterwards.
 static bool is_mc1(void);
 #define RAM_WINDOW_SIZE 0x2000
-// Bank $70 mode (monitor `b`): A20-A22 High, /ROMSEL Low, A15 Low, so A0-A14 address
-// the 32 KB at $70:0000-$7FFF directly. Needs GP26 and GP27 wired (README). Confirmed on the MC1 and the GSU-1
+// Bank $70 mode (monitor `b`): A20-A22 High, /ROMSEL Low, A15 from GP28, so A0-A15 address
+// the 64 KB at $70:0000-$FFFF directly. Needs GP26, GP27 and GP28 wired (README). Confirmed on the MC1 and the GSU-1
 // (b 0 and b 1 agree); the GSU-2 was not run with it.
-#define RAM_BANK_SIZE   0x8000
+#define RAM_BANK_SIZE   0x10000u
 
 static inline uint32_t ram_addr_bits(uint16_t off) {
     return ((uint32_t)(off & 0x3FF) << PIN_A0) |
            ((uint32_t)(AH_RAM | ((off >> 10) & 7)) << PIN_A10);
 }
 
-static inline uint32_t ram_bank_addr_bits(uint16_t off) {   // A0-A14 = off, in bank $70
-    return ((uint32_t)(off & 0x3FF) << PIN_A0) | ((uint32_t)((off >> 10) & 0x1F) << PIN_A10);
+static inline uint32_t ram_bank_addr_bits(uint32_t off) {   // A0-A15 = off, in bank $70
+    return ((off & 0x3FFu) << PIN_A0) | (((off >> 10) & 0x1Fu) << PIN_A10) | (((off >> 15) & 1u) << PIN_A15);
 }
 
 // Reads up to n bytes from RAM offset off; returns how many were read
-// (clamped at the end of the window, or of the 32 KB with bank=true).
+// (clamped at the end of the window, or of the 64 KB with bank=true).
 static uint16_t ram_read_ex(bool bank, uint16_t off, uint8_t *buf, uint16_t n) {
-    const uint16_t size = bank ? RAM_BANK_SIZE : RAM_WINDOW_SIZE;
+    const uint32_t size = bank ? RAM_BANK_SIZE : RAM_WINDOW_SIZE;
     if (off >= size) return 0;
     if (n > size - off) n = size - off;
     reg_write(GSU_SCMR, SCMR_RON);               // RAN=0: RAM belongs to the S-CPU
     if (bank) { gpio_put_masked(SEL_MASK, 1u << PIN_BANK); bus_delay(); }   // bank $70, /ROMSEL low
-    for (uint16_t i = 0; i < n; i++) {
-        gpio_put_masked(A_MASK | AH_MASK, bank ? ram_bank_addr_bits(off + i) : ram_addr_bits(off + i));
+    for (uint32_t i = 0; i < n; i++) {
+        gpio_put_masked(A_MASK | AH_MASK | A15_MASK, bank ? ram_bank_addr_bits(off + i) : ram_addr_bits(off + i));
         bus_delay();
         gpio_put(PIN_RD, 0);
         bus_delay();
@@ -242,7 +244,7 @@ static uint16_t ram_read_ex(bool bank, uint16_t off, uint8_t *buf, uint16_t n) {
         gpio_put(PIN_RD, 1);
         bus_delay();
     }
-    gpio_put_masked(A_MASK | AH_MASK, (uint32_t)AH_REGS << PIN_A10);
+    gpio_put_masked(A_MASK | AH_MASK | A15_MASK, (uint32_t)AH_REGS << PIN_A10);
     if (bank) { gpio_put_masked(SEL_MASK, 1u << PIN_ROMSEL); bus_delay(); }   // back to bank $00, /ROMSEL high
     reg_write(GSU_SCMR, SCMR_NORMAL);
     return n;
@@ -938,10 +940,10 @@ static void diag_run(void) {
 //   d               dump 256 bytes after the last dump (first time: from 0000)
 //   d saddr         dump 256 bytes from saddr
 //   d saddr,eaddr   dump saddr <= a <= eaddr (inclusive)
-//                   cart RAM is 0000-1FFF through the $6000 window (8 KB), or 0000-7FFF through
+//                   cart RAM is 0000-1FFF through the $6000 window (8 KB), or 0000-FFFF through
 //                   bank $70 (see b); an eaddr beyond it is cut off
 //   b [0|1]         RAM read path for d: b = auto (bank $70 on the MC1, the window on the
-//                   others), b 0 = $6000 window, b 1 = bank $70 (needs GP26, GP27 wired)
+//                   others), b 0 = $6000 window, b 1 = bank $70 (needs GP26-GP28 wired)
 //   r               R0-R15, SFR, PBR, CBR
 //   g               resume the GSU after the exit (not possible before the first load)
 //   t               like g, and at the next exit print the elapsed time
@@ -998,22 +1000,22 @@ static bool dump_bank(void) { return opt_bank_auto ? is_mc1() : opt_bank; }
 // aligned to 16; bytes outside start..end are left blank.
 static void mon_dump(bool bank, uint16_t start, uint16_t end) {
     uint8_t buf[16];
-    const uint16_t size = bank ? RAM_BANK_SIZE : RAM_WINDOW_SIZE;
-    for (uint16_t row = start & ~15u; row <= end; row += 16) {
-        uint16_t lo = row < start ? start : row;
+    const uint32_t size = bank ? RAM_BANK_SIZE : RAM_WINDOW_SIZE;
+    for (uint32_t row = start & ~15u; row <= end; row += 16) {   // uint32: row must not wrap at $FFF0
+        uint16_t lo = row < start ? start : (uint16_t)row;
         uint16_t hi = row + 15 > end ? end : (uint16_t)(row + 15);
         uint16_t n = ram_read_ex(bank, lo, buf, (uint16_t)(hi - lo + 1));
-        printf("%04X:", row);
-        for (uint16_t a = row; a < row + 16; a++)
+        printf("%04X:", (unsigned)row);
+        for (uint32_t a = row; a < row + 16; a++)
             if (a >= lo && a < lo + n) printf(" %02X", buf[a - lo]); else printf("   ");
         printf("  ");
-        for (uint16_t a = row; a < row + 16; a++) {
+        for (uint32_t a = row; a < row + 16; a++) {
             if (a >= lo && a < lo + n) putchar(buf[a - lo] >= ' ' && buf[a - lo] < 0x7F ? buf[a - lo] : '.');
             else putchar(' ');
         }
         printf("\r\n");
     }
-    mon_next = end + 1 >= size ? 0 : end + 1;
+    mon_next = end + 1u >= size ? 0 : (uint16_t)(end + 1u);
 }
 
 static bool is_mc1(void) { return reg_read(GSU_VCR) == 0x01; }   // MARIO chip: VCR=01
@@ -1037,7 +1039,7 @@ static void mon_cmd_cm(char cmd, const char *p) {
 // "d", "d saddr" or "d saddr,eaddr" (p points after the 'd').
 static void mon_cmd_d(const char *p) {
     const bool bank = dump_bank();
-    const uint16_t size = bank ? RAM_BANK_SIZE : RAM_WINDOW_SIZE;
+    const uint32_t size = bank ? RAM_BANK_SIZE : RAM_WINDOW_SIZE;
     uint32_t s = mon_next, e;
     const char *q = mon_hex(p, &s);
     if (q) {
@@ -1068,7 +1070,7 @@ static void mon_cmd_b(const char *p) {
         opt_bank_auto = true;
     }
     mon_next = 0;
-    printf("d reads RAM through %s%s\r\n", dump_bank() ? "bank $70 (32 KB, GP26/GP27)" : "the $6000 window (8 KB)",
+    printf("d reads RAM through %s%s\r\n", dump_bank() ? "bank $70 (64 KB, GP26-GP28)" : "the $6000 window (8 KB)",
            opt_bank_auto ? " (auto)" : "");
 }
 
@@ -1104,7 +1106,7 @@ static enum mon_result monitor(bool resumable) {
         case 'c': case 'm': mon_cmd_cm(cmd, p); break;
         case 'i': print_banner(); break;
         default:
-            printf("d [saddr[,eaddr]]  dump RAM (0000-1FFF window, 0000-7FFF bank $70)\r\n"
+            printf("d [saddr[,eaddr]]  dump RAM (0000-1FFF window, 0000-FFFF bank $70)\r\n"
                    "b [0|1]            RAM read path: auto, $6000 window, bank $70\r\n"
                    "r                  registers\r\n"
                    "g                  go (resume after exit)\r\n"

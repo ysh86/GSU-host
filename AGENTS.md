@@ -1,4 +1,4 @@
-# AGENTS.md — GSU-host (v1.4.0)
+# AGENTS.md — GSU-host (v1.4.1)
 
 Notes for AI agents (and humans) picking this project up. `README.md` is the
 user-facing doc (wiring, protocol, usage); this file covers how to work on it.
@@ -156,7 +156,7 @@ above (convention: $0200). The clock is chosen in the monitor (`c 0|1`, default 
   README ("Boards and chips"): 1C0N (MC1; external clock; /ROMSEL connected;
   A23 not), 1CA6B-01 (GSU-1A; A23 and /ROMSEL not connected) and 1CB5B-01
   (GSU-2; A23 connected). One wiring serves all: A23 low, /ROMSEL high,
-  A15-A22 low. The 16 expansion-terminal pins are unconnected on all three boards (SYSTEM
+  A15-A22 low (since 1.4.0/1.4.1 A15, A20-A22 and /ROMSEL come from GP28, GP26, GP27, idle low, low, high). The 16 expansion-terminal pins are unconnected on all three boards (SYSTEM
   CLK on 1C0N excepted); PHI2 is unconnected on all three; every cart has a CIC but it is not connected to the Super FX, so the CIC pins stay open. GSU-2
   (VCR=04) also worked with A23 open; tie it to GND anyway. The MC1 hang reported for an STB
   immediately followed by STOP was reproduced on the MC1 (hangs

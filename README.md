@@ -1,4 +1,4 @@
-# GSU-host v1.4.0
+# GSU-host v1.4.1
 
 Pico (RP2040) firmware that drives a real Super FX cartridge as a
 stand-alone processor.
@@ -154,7 +154,7 @@ the tables below.
  6 A11        in  GP22  | 37 A12        in  GP23
  7 A10        in  GP21  | 38 A13        in  GP24
  8 A9         in  GP9   | 39 A14        in  GP25
- 9 A8         in  GP8   | 40 A15        in  L
+ 9 A8         in  GP8   | 40 A15        in  GP28
 10 A7         in  GP7   | 41 A16        in  L
 11 A6         in  GP6   | 42 A17        in  L
 12 A5         in  GP5   | 43 A18        in  L
@@ -204,6 +204,7 @@ carry A10-A14). Confirmed on a Japanese Star Fox cart.
 | GP21-25 | A10-A14     | 7, 6, 37, 38, 39 |
 | GP26    | A20, A21, A22 joined (bank $70 when High) | 45, 46, 47 |
 | GP27    | /ROMSEL (Low selects the cart's ROM/RAM region) | 49 |
+| GP28    | A15 (only the bank $70 dump uses it) | 40 |
 
 A10-A14 are driven so the same wires select the GSU registers (A12=A13=1,
 the rest 0: $3000-$33FF) or the cart RAM window (A13=A14=1, A10-A12 = 1 KB
@@ -215,11 +216,11 @@ A14 low), move those five wires to GP21-GP25.
 
 | Level | Signals (connector pins) |
 |-------|--------------------------|
-| Low   | A15 (40), A16-A19 (41-44), A23 (48) |
+| Low   | A16-A19 (41-44), A23 (48) |
 
-A20-A22 (45-47, joined) and /ROMSEL (49) come from GP26 and GP27 and idle at Low and
-High, which is what the earlier hard-wiring did. (Boards wired the old way still work;
-only bank $70 mode needs the change.)
+A20-A22 (45-47, joined), /ROMSEL (49) and A15 (40) come from GP26, GP27 and GP28 and idle at
+Low, High and Low, which is what the earlier hard-wiring did. (Boards wired the old way
+still work; only bank $70 mode needs the change.)
 
 A23 matters only on 1CB5B-01 and /ROMSEL only on 1C0N; elsewhere the pins are
 not connected on the PCB and the level is ignored.
@@ -249,7 +250,7 @@ instead of using /IRQ.
 
 After reset the firmware prints a line such as
 
-    GSU host v1.4.0: VCR=01 SFR=0000 CLK=10.7MHz MODE=loader
+    GSU host v1.4.1: VCR=01 SFR=0000 CLK=10.7MHz MODE=loader
 
 with the version register, the status flags, the clock the host selects
 (`CLK` is the value the firmware writes to CLSR; CLSR cannot be read back) and
@@ -365,8 +366,8 @@ the end is cut off there.
 |---------|--------|
 | `d` | dump 256 bytes of cart RAM after the last dump (the first time from 0000) |
 | `d saddr` | dump 256 bytes from `saddr` |
-| `d saddr,eaddr` | dump `saddr` <= a <= `eaddr` (inclusive); addresses 0000-1FFF through the $6000 window, 0000-7FFF through bank $70 (see `b`) |
-| `b` / `b 0` / `b 1` | how `d` reads the RAM: `b` = auto (bank $70 on the MC1, the $6000 window on the others; the default), `b 0` = $6000 window (8 KB), `b 1` = bank $70 (32 KB, needs GP26 and GP27 wired, see below) |
+| `d saddr,eaddr` | dump `saddr` <= a <= `eaddr` (inclusive); addresses 0000-1FFF through the $6000 window, 0000-FFFF through bank $70 (see `b`) |
+| `b` / `b 0` / `b 1` | how `d` reads the RAM: `b` = auto (bank $70 on the MC1, the $6000 window on the others; the default), `b 0` = $6000 window (8 KB), `b 1` = bank $70 (64 KB, needs GP26-GP28 wired, see below) |
 | `r` | R0-R15, SFR, PBR, CBR (PBR and CBR read as `n/a` on the MC1, where they are not readable) |
 | `g` | resume the GSU after the exit, as if it were any other syscall (not possible before the first `l`) |
 | `t` | like `g`, and at the next exit also print the elapsed time: `time 12.345 ms (GSU run 12.100 ms, 34 syscalls)`: wall time from the resume to the exit (it includes waiting for USB in read and write syscalls), the time the GSU itself ran, and the number of syscalls. To time only the program, let it exit once at its start, load, then `t` to the final exit (the loading time is not counted). `l` does not start a timer |
@@ -385,16 +386,17 @@ The window works on the GSU-1 and GSU-2; on the MC1 it shows no RAM.
 
 **Bank $70 mode** (`b 1`, the default on the MC1) reads the RAM the way the S-CPU
 does in bank $70: A20, A21 and A22 High (all three cart pins 45-47, joined, driven by
-GP26), /ROMSEL Low (cart pin 49, driven by GP27), A15-A19 and A23 Low, and A0-A14
-from GP0-GP9 and GP21-GP25, so offsets 0000-7FFF (32 KB; a smaller RAM is mirrored)
-are reachable. GP26 idles Low and GP27 High (the levels the earlier hard-wiring
+GP26), /ROMSEL Low (cart pin 49, driven by GP27), A16-A19 and A23 Low, A15 from
+GP28 (cart pin 40) and A0-A14 from GP0-GP9 and GP21-GP25, so offsets 0000-FFFF (64 KB; a
+smaller RAM is mirrored) are reachable. GP26 idles Low, GP27 High and GP28 Low (the levels the earlier hard-wiring
 had), and `d` switches them only while it reads, with SCMR.RAN=0 as for the window.
-On a board without these two wires nothing changes except in bank mode, where the
-dump does not show the RAM. Confirmed on the MC1: with the two wires fitted, `d` shows
+On a board without these wires nothing changes except in bank mode, where the
+dump does not show the RAM (without GP28 only the lower 32 KB are distinct). Confirmed on the MC1: with the two wires fitted, `d` shows
 the RAM in bank $70 (after `l` the loader's bytes `A3 03 ...` are at $0000), so the MC1
 maps its RAM there with /ROMSEL low. Confirmed on the GSU-1: `b 0` and `b 1` give
 identical dumps. Beyond the RAM's size the dump shows the RAM mirrored (confirmed on the MC1).
-`[VERIFY]` the GSU-2 (not run with this mode).
+`[VERIFY]` the GSU-2 (not run with this mode), and the upper 32 KB (A15 on GP28, 1.4.1) on
+the GSU-1A of the Wild Trax cart, whose RAM is 64 KB.
 
 Cart RAM is read through the cart's S-CPU window at $6000-$7FFF in bank $00
 (A13=A14=1, A15=0), which shows the first 8 KB of the RAM the GSU sees at
