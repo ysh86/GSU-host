@@ -1,4 +1,4 @@
-# AGENTS.md — GSU-host (v1.3.1)
+# AGENTS.md — GSU-host (v1.4.0)
 
 Notes for AI agents (and humans) picking this project up. `README.md` is the
 user-facing doc (wiring, protocol, usage); this file covers how to work on it.
@@ -40,8 +40,8 @@ confirmed on hardware: the effect of `c` / `m` on the clock (the monitor and the
 the GSU-2 was not run with the monitor and is assumed like the GSU-1; listed under "Still to verify" in the README). The A10-A14 pins
 and the RAM window (host write/readback) are confirmed on the GSU-1 and GSU-2,
 but not on the MC1: the S-CPU window neither reads nor writes RAM there (diag
-[8].2-.5), so the monitor's `d` is disabled when VCR=01 (MC1). Likely
-the MC1 maps RAM only at $70-$71 (untested). Diag [8].1 cannot tell a pulled-low
+[8].2-.5), so since 1.4.0 `d` reads through bank $70 (A20-A22 on GP26, /ROMSEL on GP27) when VCR=01;
+confirmed on the MC1 (it maps its RAM only at $70-$71) and on the GSU-1 (`b 0` = `b 1`). Diag [8].1 cannot tell a pulled-low
 bus from a driving cart. Mark anything new the same way and list it there.
 
 MC1 (MARIO chip, board 1C0N, VCR=01, external clock and /ROMSEL): the

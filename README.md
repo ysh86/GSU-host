@@ -1,4 +1,4 @@
-# GSU-host v1.3.1
+# GSU-host v1.4.0
 
 Pico (RP2040) firmware that drives a real Super FX cartridge as a
 stand-alone processor.
@@ -86,7 +86,7 @@ STOP ever reached; a `-DGSU_WATCHDOG_MS=500` build printed `TIMEOUT: GSU still r
 diagnostic tests and the clock check pass at 21 MHz. The cause is not known; the
 MC1's rated clock is 10.7 MHz.
 
-Use the default 10.7 MHz clock on the MC1 (monitor `c 0`; the firmware detects the MC1 from VCR=01 for the monitor's `d`). The
+Use the default 10.7 MHz clock on the MC1 (monitor `c 0`; the firmware detects the MC1 from VCR=01, which makes `d` read through bank $70). The
 loader itself is the same on every chip: because the MC1 only runs host-written
 code from one cache block, the loader runs from cart RAM (see "RAM loader").
 Confirmed on the MC1 at 10.7 MHz: loading the echo binary works (`Hello,world`
@@ -108,7 +108,7 @@ approximate. Every connector pin is accounted for below.
 | Yoshi's Island (JP) | 1CB5B-01 | GSU-2 (VCR=04) | not needed | connected | not connected |
 
 (The GSU-1A is called GSU-1 elsewhere in this README.) One wiring serves all
-three: **A23 low (GND), /ROMSEL high**, the rest as in the pin map. On a board
+three: **A23 low (GND), /ROMSEL high (idle level of GP27)**, the rest as in the pin map. On a board
 that does not connect one of those pins, tying it is harmless. The GSU-2 cart
 also worked with A23 left open, but a connected input should not float, so tie
 it to GND. On 1C0N the clock
@@ -202,6 +202,8 @@ carry A10-A14). Confirmed on a Japanese Star Fox cart.
 | GP19    | /WR         | 54 |
 | GP20    | /RESET      | 26 (bidirectional on the console; the firmware only drives it) |
 | GP21-25 | A10-A14     | 7, 6, 37, 38, 39 |
+| GP26    | A20, A21, A22 joined (bank $70 when High) | 45, 46, 47 |
+| GP27    | /ROMSEL (Low selects the cart's ROM/RAM region) | 49 |
 
 A10-A14 are driven so the same wires select the GSU registers (A12=A13=1,
 the rest 0: $3000-$33FF) or the cart RAM window (A13=A14=1, A10-A12 = 1 KB
@@ -213,8 +215,11 @@ A14 low), move those five wires to GP21-GP25.
 
 | Level | Signals (connector pins) |
 |-------|--------------------------|
-| Low   | A15 (40), A16-A22 (41-47), A23 (48) |
-| High  | /ROMSEL, also called /CART (49) |
+| Low   | A15 (40), A16-A19 (41-44), A23 (48) |
+
+A20-A22 (45-47, joined) and /ROMSEL (49) come from GP26 and GP27 and idle at Low and
+High, which is what the earlier hard-wiring did. (Boards wired the old way still work;
+only bank $70 mode needs the change.)
 
 A23 matters only on 1CB5B-01 and /ROMSEL only on 1C0N; elsewhere the pins are
 not connected on the PCB and the level is ignored.
@@ -244,7 +249,7 @@ instead of using /IRQ.
 
 After reset the firmware prints a line such as
 
-    GSU host v1.3.1: VCR=01 SFR=0000 CLK=10.7MHz MODE=loader
+    GSU host v1.4.0: VCR=01 SFR=0000 CLK=10.7MHz MODE=loader
 
 with the version register, the status flags, the clock the host selects
 (`CLK` is the value the firmware writes to CLSR; CLSR cannot be read back) and
@@ -360,7 +365,8 @@ the end is cut off there.
 |---------|--------|
 | `d` | dump 256 bytes of cart RAM after the last dump (the first time from 0000) |
 | `d saddr` | dump 256 bytes from `saddr` |
-| `d saddr,eaddr` | dump `saddr` <= a <= `eaddr` (inclusive) |
+| `d saddr,eaddr` | dump `saddr` <= a <= `eaddr` (inclusive); addresses 0000-1FFF through the $6000 window, 0000-7FFF through bank $70 (see `b`) |
+| `b` / `b 0` / `b 1` | how `d` reads the RAM: `b` = auto (bank $70 on the MC1, the $6000 window on the others; the default), `b 0` = $6000 window (8 KB), `b 1` = bank $70 (32 KB, needs GP26 and GP27 wired, see below) |
 | `r` | R0-R15, SFR, PBR, CBR (PBR and CBR read as `n/a` on the MC1, where they are not readable) |
 | `g` | resume the GSU after the exit, as if it were any other syscall (not possible before the first `l`) |
 | `t` | like `g`, and at the next exit also print the elapsed time: `time 12.345 ms (GSU run 12.100 ms, 34 syscalls)`: wall time from the resume to the exit (it includes waiting for USB in read and write syscalls), the time the GSU itself ran, and the number of syscalls. To time only the program, let it exit once at its start, load, then `t` to the final exit (the loading time is not counted). `l` does not start a timer |
@@ -375,8 +381,20 @@ else. A warning is printed for `c 1` on the MC1, which runs away at 21.4 MHz in
 longer programs.
 | `?` | help |
 
-This works on the GSU-1 and GSU-2; on the MC1 the window shows no RAM, so `d`
-is disabled when the firmware sees VCR=01 (`r`, `g` and `l` work everywhere).
+The window works on the GSU-1 and GSU-2; on the MC1 it shows no RAM.
+
+**Bank $70 mode** (`b 1`, the default on the MC1) reads the RAM the way the S-CPU
+does in bank $70: A20, A21 and A22 High (all three cart pins 45-47, joined, driven by
+GP26), /ROMSEL Low (cart pin 49, driven by GP27), A15-A19 and A23 Low, and A0-A14
+from GP0-GP9 and GP21-GP25, so offsets 0000-7FFF (32 KB; a smaller RAM is mirrored)
+are reachable. GP26 idles Low and GP27 High (the levels the earlier hard-wiring
+had), and `d` switches them only while it reads, with SCMR.RAN=0 as for the window.
+On a board without these two wires nothing changes except in bank mode, where the
+dump does not show the RAM. Confirmed on the MC1: with the two wires fitted, `d` shows
+the RAM in bank $70 (after `l` the loader's bytes `A3 03 ...` are at $0000), so the MC1
+maps its RAM there with /ROMSEL low. Confirmed on the GSU-1: `b 0` and `b 1` give
+identical dumps. Beyond the RAM's size the dump shows the RAM mirrored (confirmed on the MC1).
+`[VERIFY]` the GSU-2 (not run with this mode).
 
 Cart RAM is read through the cart's S-CPU window at $6000-$7FFF in bank $00
 (A13=A14=1, A15=0), which shows the first 8 KB of the RAM the GSU sees at
@@ -613,15 +631,20 @@ Findings.
    0: on the MC1 the FMULT time depends on the data. (The GSU-1A took 8 in the
    zero-operand run too; its nonzero case was not measured.) `[VERIFY]` At 21.4 MHz
    the MC1 does not return from the test (the known runaway).
-5. **MC1 hangs** on three short multiply sequences that run on the GSU-1A: 16 x
-   (MULT ; NOP), and 32 x (FROM R1 ; ALT1 ; LMULT) in two lengths of run (1000
-   and 56470 iterations). Runs of identical multiplies and 32 x (FROM R1 ;
-   FMULT) are fine, and so is `mult_check` (single multiplies of each kind in a
-   straight line). The cause is unknown. The two ways to reach the hang, a
-   multiply followed by a different instruction, may be what matters. `[VERIFY]`
-   Avoid long loops that mix multiplies with other instructions on the MC1
-   until this is understood; the GSU-1A is not affected (the isolated-MULT
-   test ran there; FROM + LMULT was not run on it).
+5. **MC1 hangs** on two loop bodies that run on the GSU-1A (isolated MULT test
+   and FROM + LMULT, both measured there): 16 x (MULT ; NOP), and 32 x
+   (FROM R1 ; ALT1 ; LMULT). It does not matter whether the loop is closed
+   with LOOP or with DEC R12 ; BNE, whether the program starts with `CACHE` or
+   `CACHE ; NOP`, or whether it runs 1000 or 56470 iterations: all of these
+   hang. Runs of identical multiplies (`N M U F L`), 32 x (FROM R1 ; FMULT) and
+   `mult_check` (each multiply once, straight line) are fine. The cause is
+   unknown; a multiply followed by a different instruction (NOP, FROM) is the
+   common point of the hanging bodies, but FROM after FMULT does not hang.
+   `[VERIFY]` Avoid loops on the MC1 that mix multiplies with other
+   instructions until this is understood; the GSU-1A is not affected. A small
+   loop of NOPs written as `CACHE ; NOP ; FOR: ... ; BRA FOR ; NOP` runs from the
+   cache on the MC1; without the NOP after `CACHE` it hung after the first pass
+   (reported, not reproduced with a test file).
 6. GSU-2: not measured, assumed like the GSU-1A (same VCR=04 family).
 
 All cached results agree with the documented cycle counts (cache speed); the
@@ -655,7 +678,7 @@ Confirmed on the cart:
   `c 1` and `m 1` (on the GSU-1 and the MC1).
 - The exit syscall, `r`, `g`, `t` (elapsed time at the next exit; an echo program
   waiting for a key: 1022 ms wall, 176 ms GSU run, 48903 fstat polls, about
-  21 us per syscall) and `l` after an exit, on the MC1 and the GSU-1; `d` on the
+  21 us per syscall) and `l` after an exit, on the MC1 and the GSU-1; `d` through the $6000 window on the
   GSU-1; `c` / `m` with `t` on the GSU-1 (the program keeps working).
 - The `t` figure "GSU run" has a floor of about 1.9 us per syscall (the Pico
   polls SFR over the slow bus), the same at 10.7 and 21.4 MHz. It is accurate
@@ -701,11 +724,10 @@ or 18 (8.5); and bytes the host writes through the window never reach RAM
 The registers stay reachable. So with /ROMSEL held high the S-CPU window
 $6000-$7FFF shows no RAM on the MC1, in either direction. Most likely the MC1
 maps its RAM only at $70-$71 (where the S-CPU reaches it with /ROMSEL low); not
-tested. The monitor's `d` is therefore disabled when the firmware sees VCR=01
-(it prints a notice). Options if the MC1 needs it: drive A20, A21 and A22
-together from one GPIO (bank $70) and /ROMSEL from another (two more pins,
-GP26 and GP27), or read RAM with a GSU program into the registers (works on
-every chip; not built).
+tested. Since 1.4.0 the monitor's `d` reads the MC1's RAM through bank $70 instead:
+A20-A22 are driven together by GP26 and /ROMSEL by GP27 (see "RAM dump"); confirmed on
+the MC1. An alternative that needs no wiring, a GSU program that reads the RAM and sends
+it with the write syscall, is not built.
 (Loader speed and `BUS_DELAY_CYCLES` tuning moved to "Optimization ideas".)
 
 Open questions, cause unknown (no action planned; notes and ideas for

@@ -4,6 +4,21 @@ Newest first. "Confirmed" means run on hardware (GSU-1 = 1CA6B-01 VCR=04,
 GSU-2 = 1CB5B-01 VCR=04, MC1 = 1C0N VCR=01); anything else is in the README
 under "Still to verify".
 
+## 1.4.0
+
+- Added: GP26 (A20+A21+A22, bank $70 when High) and GP27 (/ROMSEL, Low selects the cart's
+  ROM/RAM region), idle Low and High. The monitor's `d` on the MC1 now reads the RAM
+  through bank $70 (A0-A14 from the existing address pins), 32 KB (`d` 0000-7FFF).
+  `b` selects the path: auto (default; bank $70 on the MC1, the $6000 window on the other
+  chips), `b 0` window, `b 1` bank $70 (GSU-1/GSU-2 too, to compare with the window).
+  Without the wires the bank mode does not show the RAM (no warning is printed). Beyond the
+  RAM's size the dump shows the mirror (MC1).
+- Changed: `?` prints one command per line.
+- Wiring: A20-A22 (cart pins 45-47) are joined and moved from GND to GP26; /ROMSEL (pin 49)
+  moves from High to GP27. Boards without the change still work, except for bank mode.
+- Confirmed on hardware: the MC1 shows its RAM in bank $70 (the loader's bytes after `l`) and
+  the GSU-1 reads the same bytes there as through the window. Not run: the GSU-2.
+
 ## 1.3.1
 
 Documentation and version only; the firmware behaves as in 1.3.0.
